@@ -49,7 +49,7 @@ import type {
 	WorkflowUsage,
 } from "./types.ts";
 import { emptyWorkflowUsage, mergeWorkflowUsage, workflowUsageTokens } from "./types.ts";
-import { runInIsolatedVm, type WorkflowVmHost, type WorkflowVmOptions, type WorkflowVmResult } from "./vm.ts";
+import { runInQuickJs, type WorkflowVmHost, type WorkflowVmOptions, type WorkflowVmResult } from "./vm.ts";
 
 const DEFAULT_MAX_ITERATIONS = 20;
 const MAX_MAX_ITERATIONS = 100;
@@ -141,7 +141,7 @@ export class WorkflowRuntime {
 		this.signal = options.signal;
 		this.nestedWorkflow = options.nestedWorkflow;
 		this.now = options.now ?? Date.now;
-		this.vmExecutor = options.vmExecutor ?? runInIsolatedVm;
+		this.vmExecutor = options.vmExecutor ?? runInQuickJs;
 		const startedAt = this.readNow();
 		this.startedAt = startedAt;
 		const initial: WorkflowProgress = {

@@ -6,20 +6,23 @@ import { StreamableHTTPClientTransport, StreamableHTTPError } from "@modelcontex
 import { CallToolResultSchema, type Tool as McpTool } from "@modelcontextprotocol/sdk/types.js";
 import type { AgentToolResult } from "@step-harness/agent-core";
 import { type TSchema, Type } from "typebox";
-import { readStoredCredential } from "../core/auth-storage.ts";
 import type { ExtensionAPI, ExtensionFactory } from "../core/extensions/types.ts";
 import { theme } from "../theme/theme.ts";
-import { getStepAuthPath } from "./auth.ts";
 import { readGlobalStepConfig } from "./config-toml.ts";
+import { resolveStepMcpEnvironment } from "./mcp-environment.ts";
 import { createStoredMcpOAuthProvider, hasStoredMcpOAuthCredential } from "./mcp-oauth.ts";
 import {
 	defaultStepPluginsDir,
+	ensureBuiltinPluginsInstalled,
 	listStepPluginDirectories,
+	provisionBuiltinPlugin,
 	provisionInstallCommand,
 	readStepPluginManifest,
 	type StepPluginProvision,
 } from "./plugins.ts";
 import { STEPCODE_VERSION } from "./version.ts";
+
+export { resolveStepMcpEnvironment } from "./mcp-environment.ts";
 
 const MCP_STARTUP_TIMEOUT_SEC = 30;
 const MCP_CALL_TIMEOUT_SEC = 300;
@@ -109,6 +112,21 @@ export function createStepMcpExtension(): ExtensionFactory {
 				// spawning processes. Awaiting Promise.all in session_start kept the
 				// entire initialization path behind the slowest server.
 				await yieldToEventLoop();
+				if (controller.signal.aborted) return;
+				// Provision the built-in StepPage plugin into a fresh install so its
+				// deploy tools appear without an explicit `/plugin install`. Copying the
+				// manifest is fast and blocks discovery so this session sees it;
+				// installing the MCP executable is fired in the background so a first
+				// launch never waits on the network. A still-missing executable then
+				// surfaces the normal actionable connect-failure remedy below.
+				try {
+					const preinstalled = await ensureBuiltinPluginsInstalled();
+					for (const plugin of preinstalled.installed) {
+						if (plugin.provision) void provisionBuiltinPlugin(plugin.provision).catch(() => undefined);
+					}
+				} catch {
+					// Best-effort: discovery still runs with whatever is already installed.
+				}
 				if (controller.signal.aborted) return;
 				const discovered = await discoverStepMcpServers(ctx.cwd, ctx.isProjectTrusted());
 				if (controller.signal.aborted) return;
@@ -390,26 +408,6 @@ export function describeMcpStartFailure(input: {
 function isMissingExecutable(error: unknown): boolean {
 	if (isRecord(error) && (error.code === "ENOENT" || error.errno === -2)) return true;
 	return error instanceof Error && /\bENOENT\b/u.test(error.message);
-}
-
-/** Resolve the environment passed to a plugin server, including Step login fallback. */
-export function resolveStepMcpEnvironment(
-	declared: Record<string, string> | undefined,
-	input: { env?: NodeJS.ProcessEnv; authPath?: string } = {},
-): Record<string, string> {
-	const resolved: Record<string, string> = {};
-	for (const [key, value] of Object.entries(input.env ?? process.env)) if (value !== undefined) resolved[key] = value;
-	Object.assign(resolved, declared ?? {});
-	if (!resolved.STEPFUN_API_KEY?.trim()) {
-		const credential = readStoredCredential("step", input.authPath ?? getStepAuthPath());
-		if (credential?.type === "oauth" && typeof credential.access === "string" && credential.access.trim()) {
-			resolved.STEPFUN_API_KEY = credential.access;
-		}
-		if (credential?.type === "api_key" && typeof credential.key === "string" && credential.key.trim()) {
-			resolved.STEPFUN_API_KEY = credential.key;
-		}
-	}
-	return resolved;
 }
 
 interface McpCallResult {

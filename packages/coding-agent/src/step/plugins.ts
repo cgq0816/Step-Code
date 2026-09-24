@@ -16,6 +16,7 @@ import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
 import type { ExtensionAPI, ExtensionCommandContext } from "../core/extensions/types.ts";
 import { resolveStepConfigDir } from "./environment.ts";
+import { resolveStepMcpEnvironment, STEP_LOGIN_SUPPLIED_ENV } from "./mcp-environment.ts";
 import { resolveStepStorageRoot } from "./storage-root.ts";
 import { type StepTelemetryReporter, trackStepTelemetry } from "./telemetry.ts";
 
@@ -33,6 +34,12 @@ export const BUILTIN_MARKETPLACE_NAME = "builtin";
 const STEPPAGE_INSTALLER_URL = "https://dl.stepfun.com/steppage-mcp/p/install.sh";
 
 const BUILTIN_FINGERPRINT_FILE = ".stepcode-builtin-fingerprint";
+/** Records which built-in plugins have already been auto-installed, so a plugin
+ * the user later uninstalls is not silently resurrected on the next launch. */
+const PREINSTALL_MARKER_FILE = ".stepcode-preinstalled";
+/** Built-in plugins provisioned into a fresh install without an explicit
+ * `/plugin install`, so StepPage deployment tools are available out of the box. */
+export const PREINSTALLED_BUILTIN_PLUGINS: readonly string[] = ["steppage"];
 const SAFE_NAME = /^[a-z0-9][a-z0-9._-]*$/iu;
 const MAX_MANIFEST_BYTES = 512 * 1024;
 
@@ -485,6 +492,7 @@ export async function listMarketplacePlugins(
 export async function installMarketplacePlugin(
 	entry: MarketplacePluginEntry,
 	pluginsDir = defaultStepPluginsDir(),
+	options: { provision?: boolean } = {},
 ): Promise<{ installedPath: string; warnings: string[]; diagnostics: StepPluginDiagnostics }> {
 	if (!isSafeName(entry.name)) throw new Error(`'${entry.name}' is not a safe plugin name.`);
 	const target = path.resolve(pluginsDir, entry.name);
@@ -529,8 +537,12 @@ export async function installMarketplacePlugin(
 			`Marketplace entry '${entry.name}' declares lspServers, which StepCode does not host; that contribution was not installed.`,
 		);
 	}
-	if (entry.marketplace === BUILTIN_MARKETPLACE_NAME && ownManifest.manifest?.provision) {
-		const provision = await provisionPluginCommand(ownManifest.manifest.provision);
+	if (
+		entry.marketplace === BUILTIN_MARKETPLACE_NAME &&
+		options.provision !== false &&
+		ownManifest.manifest?.provision
+	) {
+		const provision = await provisionBuiltinPlugin(ownManifest.manifest.provision);
 		if (provision) warnings.push(provision);
 	}
 	const diagnostics = await diagnoseStepPlugin(target);
@@ -553,7 +565,7 @@ export function provisionInstallCommand(
 }
 
 /** Install the executable declared by a built-in plugin, when it is missing. */
-async function provisionPluginCommand(provision: StepPluginProvision): Promise<string | undefined> {
+export async function provisionBuiltinPlugin(provision: StepPluginProvision): Promise<string | undefined> {
 	if (provision.command !== "steppage-mcp" || process.platform === "win32") {
 		return undefined;
 	}
@@ -594,7 +606,10 @@ export async function uninstallPlugin(pluginsDir: string, name: string): Promise
 }
 
 /** Read MCP declarations without starting a process. */
-export async function diagnoseStepPlugin(pluginDir: string): Promise<StepPluginDiagnostics> {
+export async function diagnoseStepPlugin(
+	pluginDir: string,
+	options: { env?: NodeJS.ProcessEnv; authPath?: string } = {},
+): Promise<StepPluginDiagnostics> {
 	const read = await readStepPluginManifest(pluginDir);
 	if (read.errors.length > 0) return { mcpServers: [], warnings: [...read.errors] };
 	if (!read.manifest) return { mcpServers: [], warnings: [`No ${STEP_PLUGIN_MANIFEST_FILE} found in ${pluginDir}.`] };
@@ -629,13 +644,56 @@ export async function diagnoseStepPlugin(pluginDir: string): Promise<StepPluginD
 	}
 	if (read.manifest.entry)
 		warnings.push("Executable plugin entries are recorded but not loaded by the Step marketplace facade.");
-	const missingEnvironment = (read.manifest.provision?.requiresEnv ?? []).filter((name) => !process.env[name]?.trim());
-	if (missingEnvironment.length > 0) {
-		warnings.push(
-			`Plugin provisioning has no shell value for ${missingEnvironment.join(", ")}; a Step login credential can supply it at runtime.`,
+	// Judged against the environment the matching servers are actually spawned
+	// with: `connectStepMcpServer` layers the process environment, the server's
+	// own declared `env`, and the Step login credential. Checking `process.env`
+	// alone reported every logged-in user as missing a variable they were never
+	// expected to export by hand. Only an inline `mcpServers` record can start a
+	// server — discovery skips a string declaration path — so that is the only
+	// shape whose declared `env` can satisfy a requirement.
+	const requiredEnvironment = read.manifest.provision?.requiresEnv ?? [];
+	if (requiredEnvironment.length > 0) {
+		const candidates = provisionedServerEnvironments(read.manifest).map((declared) =>
+			resolveStepMcpEnvironment(declared, options),
 		);
+		const missingEnvironment = requiredEnvironment.filter((name) =>
+			candidates.every((candidate) => !candidate[name]?.trim()),
+		);
+		// A Step login only ever supplies its own credential, so pointing at
+		// `/login` for an unrelated variable would send the user nowhere.
+		const missingLogin = missingEnvironment.filter((name) => STEP_LOGIN_SUPPLIED_ENV.includes(name));
+		const missingOther = missingEnvironment.filter((name) => !STEP_LOGIN_SUPPLIED_ENV.includes(name));
+		if (missingLogin.length > 0) {
+			warnings.push(
+				`Plugin provisioning has no value for ${missingLogin.join(", ")}; run /login or export it before using this plugin.`,
+			);
+		}
+		if (missingOther.length > 0) {
+			warnings.push(
+				`Plugin provisioning has no value for ${missingOther.join(", ")}; export it or declare it in the plugin's mcpServers env before using this plugin.`,
+			);
+		}
 	}
 	return { mcpServers, warnings };
+}
+
+/**
+ * The declared environments of the servers a manifest's provisioning installs,
+ * matched on the provisioned command. Returns a single `undefined` when no
+ * server matches, so the caller still judges the requirement against the
+ * process environment and the login fallback.
+ */
+function provisionedServerEnvironments(manifest: StepPluginManifest): Array<Record<string, string> | undefined> {
+	const provisionCommand = manifest.provision?.command;
+	if (!provisionCommand || !isRecord(manifest.mcpServers)) return [undefined];
+	const declared = Object.values(manifest.mcpServers).flatMap((declaration) => {
+		if (!isRecord(declaration) || declaration.command !== provisionCommand) return [];
+		if (!isRecord(declaration.env)) return [undefined];
+		const env: Record<string, string> = {};
+		for (const [key, value] of Object.entries(declaration.env)) if (typeof value === "string") env[key] = value;
+		return [env];
+	});
+	return declared.length > 0 ? declared : [undefined];
 }
 
 export async function listInstalledStepPlugins(
@@ -718,6 +776,88 @@ export async function ensureBuiltinMarketplace(
 			warnings: [`Could not install the built-in marketplace into ${target}: ${describe(error)}`],
 		};
 	}
+}
+
+export interface PreinstalledPlugin {
+	name: string;
+	provision?: StepPluginProvision;
+}
+
+export interface EnsureBuiltinPluginsResult {
+	/** Plugins whose manifest was copied into the plugin root during this call. */
+	installed: PreinstalledPlugin[];
+	warnings: string[];
+}
+
+/**
+ * Provision the built-in plugins listed in {@link PREINSTALLED_BUILTIN_PLUGINS}
+ * into a fresh install so their MCP servers are discovered without an explicit
+ * `/plugin install`. Idempotent and once-only per plugin: a marker file records
+ * every plugin already handled, so one the user later uninstalls is not silently
+ * reinstalled on the next launch.
+ *
+ * Only the declarative manifest is copied here (the executable is not
+ * provisioned) so startup stays fast; each installed plugin's `provision`
+ * descriptor is returned for the caller to install its executable out of band.
+ */
+export async function ensureBuiltinPluginsInstalled(
+	input: { pluginsDir?: string; marketplacesDir?: string } = {},
+): Promise<EnsureBuiltinPluginsResult> {
+	const pluginsDir = input.pluginsDir ?? defaultStepPluginsDir();
+	const marketplacesDir = input.marketplacesDir ?? defaultStepMarketplacesDir();
+	const markerPath = path.join(pluginsDir, PREINSTALL_MARKER_FILE);
+	const handled = await readPreinstallMarker(markerPath);
+	const pending = PREINSTALLED_BUILTIN_PLUGINS.filter((name) => !handled.has(name));
+	if (pending.length === 0) return { installed: [], warnings: [] };
+
+	const warnings: string[] = [];
+	const installed: PreinstalledPlugin[] = [];
+	const builtin = await ensureBuiltinMarketplace({ marketplacesDir });
+	warnings.push(...builtin.warnings);
+	const [available, existing] = await Promise.all([
+		listMarketplacePlugins([marketplacesDir]),
+		listInstalledStepPlugins({ userDir: pluginsDir }),
+	]);
+	const installedIds = new Set(existing.plugins.map((plugin) => plugin.id));
+
+	for (const name of pending) {
+		if (installedIds.has(name)) {
+			handled.add(name);
+			continue;
+		}
+		const entry = available.entries.find(
+			(candidate) => candidate.name === name && candidate.marketplace === BUILTIN_MARKETPLACE_NAME,
+		);
+		// Leave the plugin unmarked when the built-in source is not yet materialized
+		// so a later launch can retry rather than skip it forever.
+		if (!entry) continue;
+		try {
+			const result = await installMarketplacePlugin(entry, pluginsDir, { provision: false });
+			const manifest = await readStepPluginManifest(result.installedPath);
+			installed.push({ name, provision: manifest.manifest?.provision });
+			handled.add(name);
+		} catch (error) {
+			warnings.push(`Could not pre-install '${name}': ${describe(error)}`);
+		}
+	}
+
+	await writePreinstallMarker(markerPath, handled).catch(() => undefined);
+	return { installed, warnings };
+}
+
+async function readPreinstallMarker(markerPath: string): Promise<Set<string>> {
+	try {
+		const parsed = JSON.parse(await fs.readFile(markerPath, "utf8")) as unknown;
+		if (Array.isArray(parsed)) return new Set(parsed.filter((value): value is string => typeof value === "string"));
+	} catch {
+		// A missing or unreadable marker means nothing has been pre-installed yet.
+	}
+	return new Set();
+}
+
+async function writePreinstallMarker(markerPath: string, names: ReadonlySet<string>): Promise<void> {
+	await fs.mkdir(path.dirname(markerPath), { recursive: true, mode: 0o700 });
+	await fs.writeFile(markerPath, `${JSON.stringify([...names].sort())}\n`, "utf8");
 }
 
 /** Compatibility helper for code that needs the materialized built-in path. */

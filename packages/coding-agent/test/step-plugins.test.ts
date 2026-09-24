@@ -13,12 +13,14 @@ import {
 	defaultStepPluginsDir,
 	diagnoseStepPlugin,
 	ensureBuiltinMarketplace,
+	ensureBuiltinPluginsInstalled,
 	installMarketplacePlugin,
 	listInstalledStepPlugins,
 	listMarketplacePlugins,
 	listMarketplaceSources,
 	parseStepPluginManifest,
 	registerStepPluginCommand,
+	uninstallPlugin,
 	updateMarketplaceSource,
 } from "../src/step/plugins.ts";
 
@@ -97,6 +99,108 @@ describe("Step plugin marketplace facade", () => {
 		await expect(diagnoseStepPlugin(installed.installedPath)).resolves.toMatchObject({
 			mcpServers: ["playwright"],
 		});
+	});
+
+	test("pre-installs the built-in StepPage plugin once and respects a later uninstall", async () => {
+		const root = await mkdtemp(join(tmpdir(), "step-plugins-preinstall-"));
+		roots.push(root);
+		const marketplacesDir = join(root, "marketplaces");
+		const pluginsDir = join(root, ".stepcode", "plugins");
+
+		// A fresh install copies the StepPage manifest without provisioning the
+		// executable and reports its provision descriptor for background install.
+		const first = await ensureBuiltinPluginsInstalled({ pluginsDir, marketplacesDir });
+		expect(first.installed.map((plugin) => plugin.name)).toEqual(["steppage"]);
+		expect(first.installed[0]?.provision).toMatchObject({ command: "steppage-mcp" });
+		expect(JSON.parse(await readFile(join(pluginsDir, "steppage", "step.plugin.json"), "utf8"))).toMatchObject({
+			id: "steppage",
+		});
+		const listed = await listInstalledStepPlugins({ userDir: pluginsDir });
+		expect(listed.plugins.map((plugin) => plugin.id)).toContain("steppage");
+
+		// A second launch is a no-op: the marker records the plugin as handled.
+		const second = await ensureBuiltinPluginsInstalled({ pluginsDir, marketplacesDir });
+		expect(second.installed).toEqual([]);
+
+		// Once the user uninstalls it, a later launch must not resurrect it.
+		await uninstallPlugin(pluginsDir, "steppage");
+		const third = await ensureBuiltinPluginsInstalled({ pluginsDir, marketplacesDir });
+		expect(third.installed).toEqual([]);
+		const afterUninstall = await listInstalledStepPlugins({ userDir: pluginsDir });
+		expect(afterUninstall.plugins.map((plugin) => plugin.id)).not.toContain("steppage");
+	});
+
+	test("treats a Step login credential as satisfying a provisioned environment requirement", async () => {
+		const root = await mkdtemp(join(tmpdir(), "step-plugins-requires-env-"));
+		roots.push(root);
+		const pluginDir = join(root, "steppage");
+		await mkdir(pluginDir, { recursive: true });
+		await writeFile(
+			join(pluginDir, "step.plugin.json"),
+			JSON.stringify({
+				id: "steppage",
+				provision: {
+					command: "steppage-mcp",
+					installer: "https://example.invalid/i.sh",
+					requiresEnv: ["STEPFUN_API_KEY"],
+				},
+			}),
+		);
+		const authPath = join(root, "auth.json");
+		await writeFile(
+			authPath,
+			JSON.stringify({ step: { type: "oauth", access: "login-key", refresh: "r", expires: 0 } }),
+		);
+
+		// A logged-in user exports nothing by hand: the credential on disk is what
+		// the server is spawned with, so the doctor must not report it as missing.
+		const loggedIn = await diagnoseStepPlugin(pluginDir, { env: {}, authPath });
+		expect(loggedIn.warnings.join(" ")).not.toContain("STEPFUN_API_KEY");
+
+		// With neither a shell value nor a credential the warning is real advice.
+		const loggedOut = await diagnoseStepPlugin(pluginDir, { env: {}, authPath: join(root, "absent.json") });
+		expect(loggedOut.warnings.join(" ")).toContain("STEPFUN_API_KEY");
+		expect(loggedOut.warnings.join(" ")).toContain("/login");
+	});
+
+	test("accepts a requirement satisfied by the provisioned server's own declared env", async () => {
+		const root = await mkdtemp(join(tmpdir(), "step-plugins-declared-env-"));
+		roots.push(root);
+		const pluginDir = join(root, "declared");
+		await mkdir(pluginDir, { recursive: true });
+		await writeFile(
+			join(pluginDir, "step.plugin.json"),
+			JSON.stringify({
+				id: "declared",
+				mcpServers: { declared: { command: "steppage-mcp", env: { STEPFUN_API_KEY: "declared-key" } } },
+				provision: { command: "steppage-mcp", requiresEnv: ["STEPFUN_API_KEY"] },
+			}),
+		);
+
+		// The runtime layers the server's declared env over the process env, so a
+		// manifest that carries its own key needs neither a shell value nor a login.
+		const diagnostics = await diagnoseStepPlugin(pluginDir, { env: {}, authPath: join(root, "absent.json") });
+		expect(diagnostics.warnings.join(" ")).not.toContain("STEPFUN_API_KEY");
+	});
+
+	test("points a non-login variable at configuration rather than /login", async () => {
+		const root = await mkdtemp(join(tmpdir(), "step-plugins-other-env-"));
+		roots.push(root);
+		const pluginDir = join(root, "other");
+		await mkdir(pluginDir, { recursive: true });
+		await writeFile(
+			join(pluginDir, "step.plugin.json"),
+			JSON.stringify({
+				id: "other",
+				mcpServers: { other: { command: "other-mcp" } },
+				provision: { command: "other-mcp", requiresEnv: ["GITHUB_TOKEN"] },
+			}),
+		);
+
+		// A Step login cannot supply someone else's token, so it must not be the advice.
+		const diagnostics = await diagnoseStepPlugin(pluginDir, { env: {}, authPath: join(root, "absent.json") });
+		expect(diagnostics.warnings.join(" ")).toContain("GITHUB_TOKEN");
+		expect(diagnostics.warnings.join(" ")).not.toContain("/login");
 	});
 
 	test("does not overwrite a Claude-style plugin manifest", async () => {

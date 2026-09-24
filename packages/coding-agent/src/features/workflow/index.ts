@@ -48,4 +48,4 @@ export {
 	WORKFLOW_TOOL_PROFILES,
 } from "./tool-profile.ts";
 export type * from "./types.ts";
-export { isIsolatedVmAvailable, loadIsolatedVm, runInIsolatedVm, WORKFLOW_MAX_SCRIPT_BYTES } from "./vm.ts";
+export { runInQuickJs, WORKFLOW_MAX_SCRIPT_BYTES } from "./vm.ts";
