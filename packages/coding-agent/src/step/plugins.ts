@@ -16,6 +16,7 @@ import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
 import type { ExtensionAPI, ExtensionCommandContext } from "../core/extensions/types.ts";
 import { resolveStepConfigDir } from "./environment.ts";
+import { resolveStepMcpEnvironment } from "./mcp-environment.ts";
 import { resolveStepStorageRoot } from "./storage-root.ts";
 import { type StepTelemetryReporter, trackStepTelemetry } from "./telemetry.ts";
 
@@ -605,7 +606,10 @@ export async function uninstallPlugin(pluginsDir: string, name: string): Promise
 }
 
 /** Read MCP declarations without starting a process. */
-export async function diagnoseStepPlugin(pluginDir: string): Promise<StepPluginDiagnostics> {
+export async function diagnoseStepPlugin(
+	pluginDir: string,
+	options: { env?: NodeJS.ProcessEnv; authPath?: string } = {},
+): Promise<StepPluginDiagnostics> {
 	const read = await readStepPluginManifest(pluginDir);
 	if (read.errors.length > 0) return { mcpServers: [], warnings: [...read.errors] };
 	if (!read.manifest) return { mcpServers: [], warnings: [`No ${STEP_PLUGIN_MANIFEST_FILE} found in ${pluginDir}.`] };
@@ -640,11 +644,19 @@ export async function diagnoseStepPlugin(pluginDir: string): Promise<StepPluginD
 	}
 	if (read.manifest.entry)
 		warnings.push("Executable plugin entries are recorded but not loaded by the Step marketplace facade.");
-	const missingEnvironment = (read.manifest.provision?.requiresEnv ?? []).filter((name) => !process.env[name]?.trim());
-	if (missingEnvironment.length > 0) {
-		warnings.push(
-			`Plugin provisioning has no shell value for ${missingEnvironment.join(", ")}; a Step login credential can supply it at runtime.`,
-		);
+	// Judged against the environment the server will actually be spawned with,
+	// not the bare shell: a Step login supplies STEPFUN_API_KEY at spawn time, so
+	// checking `process.env` alone reported every logged-in user as missing a
+	// variable they were never expected to export by hand.
+	const requiredEnvironment = read.manifest.provision?.requiresEnv ?? [];
+	if (requiredEnvironment.length > 0) {
+		const runtimeEnvironment = resolveStepMcpEnvironment(undefined, options);
+		const missingEnvironment = requiredEnvironment.filter((name) => !runtimeEnvironment[name]?.trim());
+		if (missingEnvironment.length > 0) {
+			warnings.push(
+				`Plugin provisioning has no value for ${missingEnvironment.join(", ")}; run /login or export it before using this plugin.`,
+			);
+		}
 	}
 	return { mcpServers, warnings };
 }
