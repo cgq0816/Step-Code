@@ -11,6 +11,13 @@
 import { readStoredCredential } from "../core/auth-storage.ts";
 import { getStepAuthPath } from "./auth.ts";
 
+/**
+ * The variables a Step login can supply on its own, so callers can tell a user
+ * whose only gap is `/login` apart from one who has to configure a variable
+ * StepCode knows nothing about.
+ */
+export const STEP_LOGIN_SUPPLIED_ENV: readonly string[] = ["STEPFUN_API_KEY"];
+
 /** Resolve the environment passed to a plugin server, including Step login fallback. */
 export function resolveStepMcpEnvironment(
 	declared: Record<string, string> | undefined,

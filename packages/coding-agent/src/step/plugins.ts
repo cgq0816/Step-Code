@@ -16,7 +16,7 @@ import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
 import type { ExtensionAPI, ExtensionCommandContext } from "../core/extensions/types.ts";
 import { resolveStepConfigDir } from "./environment.ts";
-import { resolveStepMcpEnvironment } from "./mcp-environment.ts";
+import { resolveStepMcpEnvironment, STEP_LOGIN_SUPPLIED_ENV } from "./mcp-environment.ts";
 import { resolveStepStorageRoot } from "./storage-root.ts";
 import { type StepTelemetryReporter, trackStepTelemetry } from "./telemetry.ts";
 
@@ -644,21 +644,56 @@ export async function diagnoseStepPlugin(
 	}
 	if (read.manifest.entry)
 		warnings.push("Executable plugin entries are recorded but not loaded by the Step marketplace facade.");
-	// Judged against the environment the server will actually be spawned with,
-	// not the bare shell: a Step login supplies STEPFUN_API_KEY at spawn time, so
-	// checking `process.env` alone reported every logged-in user as missing a
-	// variable they were never expected to export by hand.
+	// Judged against the environment the matching servers are actually spawned
+	// with: `connectStepMcpServer` layers the process environment, the server's
+	// own declared `env`, and the Step login credential. Checking `process.env`
+	// alone reported every logged-in user as missing a variable they were never
+	// expected to export by hand. Only an inline `mcpServers` record can start a
+	// server — discovery skips a string declaration path — so that is the only
+	// shape whose declared `env` can satisfy a requirement.
 	const requiredEnvironment = read.manifest.provision?.requiresEnv ?? [];
 	if (requiredEnvironment.length > 0) {
-		const runtimeEnvironment = resolveStepMcpEnvironment(undefined, options);
-		const missingEnvironment = requiredEnvironment.filter((name) => !runtimeEnvironment[name]?.trim());
-		if (missingEnvironment.length > 0) {
+		const candidates = provisionedServerEnvironments(read.manifest).map((declared) =>
+			resolveStepMcpEnvironment(declared, options),
+		);
+		const missingEnvironment = requiredEnvironment.filter((name) =>
+			candidates.every((candidate) => !candidate[name]?.trim()),
+		);
+		// A Step login only ever supplies its own credential, so pointing at
+		// `/login` for an unrelated variable would send the user nowhere.
+		const missingLogin = missingEnvironment.filter((name) => STEP_LOGIN_SUPPLIED_ENV.includes(name));
+		const missingOther = missingEnvironment.filter((name) => !STEP_LOGIN_SUPPLIED_ENV.includes(name));
+		if (missingLogin.length > 0) {
 			warnings.push(
-				`Plugin provisioning has no value for ${missingEnvironment.join(", ")}; run /login or export it before using this plugin.`,
+				`Plugin provisioning has no value for ${missingLogin.join(", ")}; run /login or export it before using this plugin.`,
+			);
+		}
+		if (missingOther.length > 0) {
+			warnings.push(
+				`Plugin provisioning has no value for ${missingOther.join(", ")}; export it or declare it in the plugin's mcpServers env before using this plugin.`,
 			);
 		}
 	}
 	return { mcpServers, warnings };
+}
+
+/**
+ * The declared environments of the servers a manifest's provisioning installs,
+ * matched on the provisioned command. Returns a single `undefined` when no
+ * server matches, so the caller still judges the requirement against the
+ * process environment and the login fallback.
+ */
+function provisionedServerEnvironments(manifest: StepPluginManifest): Array<Record<string, string> | undefined> {
+	const provisionCommand = manifest.provision?.command;
+	if (!provisionCommand || !isRecord(manifest.mcpServers)) return [undefined];
+	const declared = Object.values(manifest.mcpServers).flatMap((declaration) => {
+		if (!isRecord(declaration) || declaration.command !== provisionCommand) return [];
+		if (!isRecord(declaration.env)) return [undefined];
+		const env: Record<string, string> = {};
+		for (const [key, value] of Object.entries(declaration.env)) if (typeof value === "string") env[key] = value;
+		return [env];
+	});
+	return declared.length > 0 ? declared : [undefined];
 }
 
 export async function listInstalledStepPlugins(
