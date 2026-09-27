@@ -50,6 +50,10 @@ function runCli(flags: string[], repository: boolean) {
 		NODE_ENV: "test",
 		FORCE_COLOR: "0",
 		COMPLETION_CHECK_CALL_LOG: callLog,
+		// Keep child runtime caches in the fixture as well as the outer test temp root.
+		TMPDIR: root,
+		// A temporary directory may be inside the enclosing source checkout.
+		GIT_CEILING_DIRECTORIES: root,
 	};
 	for (const name of ["PATH", "SystemRoot", "SYSTEMROOT", "WINDIR", "COMSPEC", "PATHEXT"]) {
 		if (process.env[name] !== undefined) env[name] = process.env[name];
@@ -110,12 +114,48 @@ describe("real CLI completion-check dispatch with an offline provider", () => {
 			.map((line) => JSON.parse(line))
 			.filter((event) => event.type === "completion_check");
 		expect(checks).toHaveLength(3);
+		for (const check of checks) {
+			expect(check).not.toHaveProperty("review");
+			expect(check).not.toHaveProperty("followUpKind");
+		}
 		expect(checks.at(-1)).toMatchObject({
 			hasNewCommit: false,
 			hasCommittedChanges: false,
 			status: "exhausted",
 			willFollowUp: false,
 		});
+	});
+
+	it("forwards review and combines it with repair within the existing two-prompt budget", () => {
+		const result = runCli(["--mode", "json", "--completion-check=git-committed", "--completion-review"], true);
+		expect(result.error).toBeUndefined();
+		expect(result.status, result.stderr).toBe(0);
+		expect(result.calls).toBe(3);
+		const events = result.stdout
+			.trim()
+			.split("\n")
+			.map((line) => JSON.parse(line));
+		const checks = events.filter((event) => event.type === "completion_check");
+		expect(checks.map((event) => [event.attempt, event.status, event.followUpKind, event.review])).toEqual([
+			[0, "follow_up", "review", { requested: true, sent: false }],
+			[0, "follow_up", "review", { requested: true, sent: true }],
+			[1, "follow_up", "completion", { requested: true, sent: true }],
+			[2, "exhausted", undefined, { requested: true, sent: true }],
+		]);
+		const users = events.filter((event) => event.type === "message_end" && event.message.role === "user");
+		expect(users).toHaveLength(3);
+		expect(JSON.stringify(users[1])).toContain("Final self-review:");
+		expect(JSON.stringify(users[1])).toContain("no new commit since the starting HEAD");
+		expect(JSON.stringify(users[2])).not.toContain("Final self-review:");
+		expect(result.stderr).toContain("Completion check incomplete after 2 follow-up(s).");
+	});
+
+	it("rejects review without the checker before invoking the provider", () => {
+		const result = runCli(["-p", "--completion-review"], false);
+		expect(result.error).toBeUndefined();
+		expect(result.status, result.stderr).toBe(1);
+		expect(result.calls).toBe(0);
+		expect(result.stderr).toContain("--completion-review requires --completion-check git-committed");
 	});
 
 	it("fails a non-repository before the provider is invoked", () => {
@@ -135,14 +175,19 @@ describe("real CLI completion-check dispatch with an offline provider", () => {
 		expect(result.stdout).toBe("CLI offline final\n");
 	});
 
-	it.each([["--completion-check-attempts", "4"], ["--mode", "rpc"], ["--sdk-stdio"]])(
-		"rejects invalid CLI options before the provider is invoked: %j",
-		(...invalid) => {
-			const result = runCli(["--completion-check", "git-committed", ...invalid], false);
-			expect(result.error).toBeUndefined();
-			expect(result.status, result.stderr).toBe(1);
-			expect(result.calls).toBe(0);
-			expect(result.stderr).toContain("--completion-check");
-		},
-	);
+	it.each([
+		["--completion-check-attempts", "4"],
+		["--mode", "rpc"],
+		["--sdk-stdio"],
+		["--completion-review", "--completion-check-attempts", "4"],
+		["--completion-review", "--mode", "rpc"],
+		["--completion-review", "--sdk-stdio"],
+		["--completion-review=true"],
+	])("rejects invalid CLI options before the provider is invoked: %j", (...invalid) => {
+		const result = runCli(["--completion-check", "git-committed", ...invalid], false);
+		expect(result.error).toBeUndefined();
+		expect(result.status, result.stderr).toBe(1);
+		expect(result.calls).toBe(0);
+		expect(result.stderr).toContain("--completion-");
+	});
 });

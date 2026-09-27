@@ -5,6 +5,8 @@ export interface CompletionCheckOptions {
 	completionCheck?: "git-committed";
 	/** Maximum additional prompts, 1..3 (default 2). */
 	completionCheckAttempts?: number;
+	/** Request one self-review within the completion follow-up budget (default off). */
+	completionReview?: boolean;
 }
 
 export interface GitCompletionState {
@@ -16,6 +18,9 @@ export interface GitCompletionState {
 
 export function getCompletionCheckAttempts(options: CompletionCheckOptions): number | undefined {
 	if (options.completionCheck === undefined) {
+		if (options.completionReview) {
+			throw new Error("--completion-review requires --completion-check git-committed");
+		}
 		if (options.completionCheckAttempts !== undefined) {
 			throw new Error("--completion-check-attempts requires --completion-check git-committed");
 		}
@@ -131,13 +136,23 @@ export async function createGitCompletionCheck(
 	return check;
 }
 
-export function completionCheckFeedback(git: GitCompletionState, hasFinalText: boolean): string {
+export function completionCheckFeedback(git: GitCompletionState, hasFinalText: boolean, review = false): string {
 	const missing: string[] = [];
 	if (!git.hasNewCommit) missing.push("no new commit since the starting HEAD");
 	if (!git.hasCommittedChanges) missing.push("no committed tree changes from the starting HEAD");
 	if (git.trackedDirty) missing.push("tracked changes remain");
 	if (git.untrackedFiles) missing.push("unignored untracked files remain");
 	if (!hasFinalText) missing.push("final answer text is missing");
+	if (review) {
+		return (
+			(missing.length > 0 ? `Completion check: ${missing.join("; ")}. ` : "") +
+			"Final self-review: Compare your work with the original visible task. " +
+			"Check task coverage, public interfaces and types, boundary cases, and the final diff. " +
+			"Confirm relevant tests and checks were run after the last edit; run any missing verification. " +
+			"Fix issues you find, commit any remaining task changes, then provide a brief final answer. " +
+			"Preserve unrelated user changes and respect permission denials."
+		);
+	}
 	return (
 		`Completion check: ${missing.join("; ")}. ` +
 		"Complete the task's required verification and commit any remaining task changes, then provide a brief final answer. " +

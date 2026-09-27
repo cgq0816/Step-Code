@@ -178,7 +178,9 @@ describe("read-only git-committed check", () => {
 describe("completion-check option validation for direct print-mode callers", () => {
 	it("defaults to off or two follow-ups when explicitly enabled", () => {
 		expect(getCompletionCheckAttempts({})).toBeUndefined();
+		expect(getCompletionCheckAttempts({ completionReview: false })).toBeUndefined();
 		expect(getCompletionCheckAttempts({ completionCheck: "git-committed" })).toBe(2);
+		expect(getCompletionCheckAttempts({ completionCheck: "git-committed", completionReview: true })).toBe(2);
 	});
 
 	it.each([0, 4, -1, 1.5, Number.NaN, Number.POSITIVE_INFINITY])("rejects invalid bound %s", (attempts) => {
@@ -189,5 +191,45 @@ describe("completion-check option validation for direct print-mode callers", () 
 
 	it("rejects attempts without an enabled check", () => {
 		expect(() => getCompletionCheckAttempts({ completionCheckAttempts: 2 })).toThrow("requires --completion-check");
+	});
+
+	it("rejects review without an enabled check", () => {
+		expect(() => getCompletionCheckAttempts({ completionReview: true })).toThrow(
+			"--completion-review requires --completion-check git-committed",
+		);
+	});
+});
+
+describe("completion self-review feedback", () => {
+	it("reviews visible requirements without inventing a missing Git condition", () => {
+		const feedback = completionCheckFeedback(
+			{ hasNewCommit: true, hasCommittedChanges: true, trackedDirty: false, untrackedFiles: false },
+			true,
+			true,
+		);
+		expect(feedback).toContain("original visible task");
+		expect(feedback).toContain("public interfaces and types");
+		expect(feedback).toContain("boundary cases");
+		expect(feedback).toContain("final diff");
+		expect(feedback).toContain("after the last edit");
+		expect(feedback).toContain("Preserve unrelated user changes and respect permission denials.");
+		expect(feedback).not.toContain("Completion check:");
+	});
+
+	it("combines missing delivery conditions and review in one prompt", () => {
+		const git = { hasNewCommit: false, hasCommittedChanges: false, trackedDirty: true, untrackedFiles: true };
+		const feedback = completionCheckFeedback(git, false, true);
+		for (const condition of [
+			"no new commit since the starting HEAD",
+			"no committed tree changes from the starting HEAD",
+			"tracked changes remain",
+			"unignored untracked files remain",
+			"final answer text is missing",
+		]) {
+			expect(feedback).toContain(condition);
+		}
+		expect(feedback).toContain("Final self-review:");
+		expect(completionCheckFeedback(git, false, false)).toBe(completionCheckFeedback(git, false));
+		expect(completionCheckFeedback(git, false)).not.toContain("Final self-review:");
 	});
 });

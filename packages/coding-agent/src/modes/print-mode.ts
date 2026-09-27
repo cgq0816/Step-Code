@@ -108,6 +108,8 @@ export async function runPrintMode(runtimeHost: AgentSessionRuntimeHost, options
 	let assistantFailure: AssistantMessage | undefined;
 	const completionAbort = new AbortController();
 	let completionAttempts: number | undefined;
+	let reviewRequested = false;
+	let reviewSent = false;
 
 	const disposeRuntime = async (): Promise<void> => {
 		if (disposed) return;
@@ -260,7 +262,7 @@ export async function runPrintMode(runtimeHost: AgentSessionRuntimeHost, options
 					console.error(error instanceof Error ? error.message : "Completion check: Git state unavailable.");
 					if (mode === "json") {
 						writeRawStdout(
-							`${JSON.stringify({ type: "completion_check", check: "git-committed", attempt, status: "unavailable", willFollowUp: false })}\n`,
+							`${JSON.stringify({ type: "completion_check", check: "git-committed", attempt, status: "unavailable", willFollowUp: false, ...(options.completionReview ? { review: { requested: reviewRequested, sent: reviewSent } } : {}) })}\n`,
 						);
 					}
 					// Do not turn a task failure with valid final text into a retryable
@@ -269,13 +271,34 @@ export async function runPrintMode(runtimeHost: AgentSessionRuntimeHost, options
 				}
 				if (terminalOutcome() || session !== completionSession || runtimeHost.cwd !== completionCwd) break;
 				const hasFinalText = hasFinalAssistantText(session.state.messages.at(-1));
+				const requestReview = options.completionReview === true && !reviewRequested;
 				const passed =
-					git.hasNewCommit && git.hasCommittedChanges && !git.trackedDirty && !git.untrackedFiles && hasFinalText;
+					git.hasNewCommit &&
+					git.hasCommittedChanges &&
+					!git.trackedDirty &&
+					!git.untrackedFiles &&
+					hasFinalText &&
+					!requestReview;
 				const willFollowUp = !passed && attempt < completionAttempts;
+				if (willFollowUp && requestReview) reviewRequested = true;
+				const completionEvent = {
+					type: "completion_check",
+					check: "git-committed",
+					attempt,
+					maxAttempts: completionAttempts,
+					...git,
+					hasFinalText,
+					status: passed ? "passed" : willFollowUp ? "follow_up" : "exhausted",
+					willFollowUp,
+					...(options.completionReview
+						? {
+								review: { requested: reviewRequested, sent: reviewSent },
+								...(willFollowUp ? { followUpKind: requestReview ? "review" : "completion" } : {}),
+							}
+						: {}),
+				};
 				if (mode === "json") {
-					writeRawStdout(
-						`${JSON.stringify({ type: "completion_check", check: "git-committed", attempt, maxAttempts: completionAttempts, ...git, hasFinalText, status: passed ? "passed" : willFollowUp ? "follow_up" : "exhausted", willFollowUp })}\n`,
-					);
+					writeRawStdout(`${JSON.stringify(completionEvent)}\n`);
 					await waitForRawStdoutBackpressure();
 				}
 				if (!willFollowUp) {
@@ -284,7 +307,34 @@ export async function runPrintMode(runtimeHost: AgentSessionRuntimeHost, options
 				}
 				// Backpressure may yield to a signal or a runtime replacement.
 				if (terminalOutcome() || session !== completionSession || runtimeHost.cwd !== completionCwd) break;
-				await session.prompt(completionCheckFeedback(git, hasFinalText), { expandPromptTemplates: false });
+				const feedback = completionCheckFeedback(git, hasFinalText, requestReview);
+				// A requested prompt can still fail preflight or be intercepted by an
+				// extension. A user-message event is evidence of delivery to this session,
+				// even if a later assistant error prevents another completion inspection.
+				const unsubscribeReview = requestReview
+					? session.subscribe((event) => {
+							if (reviewSent || event.type !== "message_end" || event.message.role !== "user") return;
+							const content = event.message.content;
+							if (
+								typeof content === "string"
+									? content !== feedback
+									: !content.some((part) => isTextPart(part) && part.text === feedback)
+							) {
+								return;
+							}
+							reviewSent = true;
+							if (mode === "json") {
+								writeRawStdout(
+									`${JSON.stringify({ ...completionEvent, review: { requested: true, sent: true } })}\n`,
+								);
+							}
+						})
+					: undefined;
+				try {
+					await session.prompt(feedback, { expandPromptTemplates: false });
+				} finally {
+					unsubscribeReview?.();
+				}
 				assistantFailure ??= getAssistantFailure(session.state.messages.at(-1));
 			}
 		}

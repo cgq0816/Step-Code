@@ -6,6 +6,7 @@ describe("completion-check CLI options", () => {
 		const parsed = parseArgs(["-p", "task"]);
 		expect(parsed.completionCheck).toBeUndefined();
 		expect(parsed.completionCheckAttempts).toBeUndefined();
+		expect(parsed.completionReview).toBeUndefined();
 		expect(parsed.diagnostics).toEqual([]);
 	});
 
@@ -13,6 +14,7 @@ describe("completion-check CLI options", () => {
 		const parsed = parseArgs(["--completion-check", "git-committed", "-p", "first", "second"]);
 		expect(parsed.completionCheck).toBe("git-committed");
 		expect(parsed.completionCheckAttempts).toBe(2);
+		expect(parsed.completionReview).toBeUndefined();
 		expect(parsed.messages).toEqual(["first", "second"]);
 		expect(parsed.unknownFlags.size).toBe(0);
 		expect(parsed.diagnostics).toEqual([]);
@@ -68,18 +70,51 @@ describe("completion-check CLI options", () => {
 		]);
 	});
 
-	it.each([["--mode", "rpc"], ["--sdk-stdio"]])("rejects incompatible mode %j", (...flags) => {
-		const parsed = parseArgs(["--completion-check", "git-committed", ...flags]);
+	it("requires the check when requesting review", () => {
+		expect(parseArgs(["--completion-review", "-p", "task"]).diagnostics).toEqual([
+			{ type: "error", message: "--completion-review requires --completion-check git-committed" },
+		]);
+	});
+
+	it.each([1, 2, 3])("parses review as a boolean sharing the %i follow-up budget", (attempts) => {
+		const parsed = parseArgs([
+			"--completion-review",
+			"--completion-check=git-committed",
+			`--completion-check-attempts=${attempts}`,
+			"-p",
+			"first",
+			"second",
+		]);
+		expect(parsed.completionReview).toBe(true);
+		expect(parsed.completionCheckAttempts).toBe(attempts);
+		expect(parsed.messages).toEqual(["first", "second"]);
+		expect(parsed.unknownFlags.size).toBe(0);
+		expect(parsed.diagnostics).toEqual([]);
+	});
+
+	it.each(["true", "false", "2"])("rejects a value supplied to the review flag: %s", (value) => {
+		const parsed = parseArgs(["--completion-check=git-committed", `--completion-review=${value}`]);
 		expect(parsed.diagnostics).toContainEqual({
 			type: "error",
-			message: "--completion-check is only supported in print or JSON mode",
+			message: "--completion-review does not take a value",
 		});
 	});
 
+	it.each([["--mode", "rpc"], ["--sdk-stdio"]])("rejects incompatible mode %j", (...flags) => {
+		for (const review of [[], ["--completion-review"]]) {
+			const parsed = parseArgs(["--completion-check", "git-committed", ...review, ...flags]);
+			expect(parsed.diagnostics).toContainEqual({
+				type: "error",
+				message: "--completion-check is only supported in print or JSON mode",
+			});
+		}
+	});
+
 	it("leaves arguments after -- as literal user messages", () => {
-		const parsed = parseArgs(["-p", "--", "--completion-check", "git-committed"]);
+		const parsed = parseArgs(["-p", "--", "--completion-check", "git-committed", "--completion-review"]);
 		expect(parsed.completionCheck).toBeUndefined();
-		expect(parsed.messages).toEqual(["--completion-check", "git-committed"]);
+		expect(parsed.completionReview).toBeUndefined();
+		expect(parsed.messages).toEqual(["--completion-check", "git-committed", "--completion-review"]);
 	});
 
 	it("documents opt-in behavior and the follow-up bound in help", () => {
@@ -91,6 +126,8 @@ describe("completion-check CLI options", () => {
 			expect(help).toContain("git-committed");
 			expect(help).toContain("--completion-check-attempts <n>");
 			expect(help).toContain("1..3 (default: 2)");
+			expect(help).toContain("--completion-review");
+			expect(help).toContain("shares its follow-up budget");
 		} finally {
 			log.mockRestore();
 		}

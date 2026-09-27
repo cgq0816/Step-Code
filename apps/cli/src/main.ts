@@ -555,6 +555,14 @@ try {
 				let shouldLaunchMain = true;
 				const parsedInteractiveArgs = parseArgs(compatibility?.args ?? stepCodeArgs);
 				if (
+					parsedInteractiveArgs.completionReview &&
+					!parsedInteractiveArgs.completionCheck &&
+					!parsedInteractiveArgs.help &&
+					!parsedInteractiveArgs.version
+				) {
+					throw new Error("--completion-review requires --completion-check git-committed");
+				}
+				if (
 					parsedInteractiveArgs.completionCheck &&
 					!parsedInteractiveArgs.help &&
 					!parsedInteractiveArgs.version &&
@@ -731,6 +739,7 @@ async function dispatchStepAppMode(prep: Extract<MainPreparation, { kind: "dispa
 				mode: toPrintOutputMode(prep.appMode),
 				completionCheck: prep.parsed.completionCheck,
 				completionCheckAttempts: prep.parsed.completionCheckAttempts,
+				completionReview: prep.parsed.completionReview,
 				messages: prep.parsed.messages,
 				initialMessage: prep.initialMessage,
 				initialImages: prep.initialImages,

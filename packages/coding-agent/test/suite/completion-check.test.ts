@@ -13,6 +13,15 @@ import { createHarness, getUserTexts, type Harness, type HarnessOptions } from "
 const harnesses: Harness[] = [];
 let stdout = "";
 
+function getCompletionEvents(): Record<string, unknown>[] {
+	return stdout
+		.trim()
+		.split("\n")
+		.filter(Boolean)
+		.map((line) => JSON.parse(line) as Record<string, unknown>)
+		.filter((event) => event.type === "completion_check");
+}
+
 function git(cwd: string, ...args: string[]): string {
 	return execFileSync(
 		"git",
@@ -268,32 +277,47 @@ describe("runPrintMode same-session completion check", () => {
 		expect(stdout).toBe("final answer\n");
 	});
 
-	it.each(["error", "aborted"] as const)("never prompts again after assistant %s", async (stopReason) => {
-		const { harness, run } = await setup();
-		harness.setResponses([
-			fauxAssistantMessage("", { stopReason, errorMessage: "terminal failure" }),
-			fauxAssistantMessage("must not be used"),
-		]);
-		expect(await run({ messages: ["pending user prompt"] })).toBe(1);
-		expect(harness.faux.state.callCount).toBe(1);
-		expect(getUserTexts(harness)).toHaveLength(1);
-		expect(console.error).toHaveBeenCalledWith("terminal failure");
-	});
+	it.each([
+		{ stopReason: "error", completionReview: false },
+		{ stopReason: "error", completionReview: true },
+		{ stopReason: "aborted", completionReview: false },
+		{ stopReason: "aborted", completionReview: true },
+	] as const)(
+		"never prompts after assistant $stopReason with review=$completionReview",
+		async ({ stopReason, completionReview }) => {
+			const { harness, run } = await setup();
+			harness.setResponses([
+				fauxAssistantMessage("", { stopReason, errorMessage: "terminal failure" }),
+				fauxAssistantMessage("must not be used"),
+			]);
+			expect(await run({ mode: "json", completionReview, messages: ["pending user prompt"] })).toBe(1);
+			expect(harness.faux.state.callCount).toBe(1);
+			expect(getUserTexts(harness)).toHaveLength(1);
+			expect(console.error).toHaveBeenCalledWith("terminal failure");
+			expect(getCompletionEvents()).toEqual([]);
+		},
+	);
 
-	it("does not add completion prompts after an error recovered by native retry", async () => {
-		const { harness, run } = await setup({ settings: { retry: { enabled: true, maxRetries: 1, baseDelayMs: 1 } } });
-		harness.setResponses([
-			fauxAssistantMessage("", { stopReason: "error", errorMessage: "overloaded_error" }),
-			fauxAssistantMessage("native retry recovered"),
-			fauxAssistantMessage("must not be used"),
-		]);
-		expect(await run()).toBe(0);
-		expect(harness.faux.state.callCount).toBe(2);
-		expect(getUserTexts(harness)).toHaveLength(1);
-		expect(harness.getPendingResponseCount()).toBe(1);
-	});
+	it.each([false, true])(
+		"does not add prompts after native retry recovery with review=%s",
+		async (completionReview) => {
+			const { harness, run } = await setup({
+				settings: { retry: { enabled: true, maxRetries: 1, baseDelayMs: 1 } },
+			});
+			harness.setResponses([
+				fauxAssistantMessage("", { stopReason: "error", errorMessage: "overloaded_error" }),
+				fauxAssistantMessage("native retry recovered"),
+				fauxAssistantMessage("must not be used"),
+			]);
+			expect(await run({ mode: "json", completionReview })).toBe(0);
+			expect(harness.faux.state.callCount).toBe(2);
+			expect(getUserTexts(harness)).toHaveLength(1);
+			expect(harness.getPendingResponseCount()).toBe(1);
+			expect(getCompletionEvents()).toEqual([]);
+		},
+	);
 
-	it("never follows a terminating permission denial", async () => {
+	it.each([false, true])("never follows a terminating permission denial with review=%s", async (completionReview) => {
 		const execute = vi.fn(async () => ({ content: [{ type: "text" as const, text: "unsafe" }], details: {} }));
 		const tool: AgentTool = {
 			name: "blocked_tool",
@@ -314,7 +338,7 @@ describe("runPrintMode same-session completion check", () => {
 			fauxAssistantMessage(fauxToolCall("blocked_tool", {}), { stopReason: "toolUse" }),
 			fauxAssistantMessage("must not be used"),
 		]);
-		expect(await run({ mode: "json", messages: ["pending user prompt"] })).toBe(1);
+		expect(await run({ mode: "json", completionReview, messages: ["pending user prompt"] })).toBe(1);
 		expect(harness.faux.state.callCount).toBe(1);
 		expect(execute).not.toHaveBeenCalled();
 		expect(stdout).toContain("explicit permission denial");
@@ -351,18 +375,22 @@ describe("runPrintMode same-session completion check", () => {
 		expect(host.dispose).toHaveBeenCalledTimes(1);
 	});
 
-	it("does not classify a post-model Git failure with final text as infrastructure error", async () => {
-		const { harness, run } = await setup();
-		harness.setResponses([
-			() => {
-				renameSync(join(harness.tempDir, ".git"), join(harness.tempDir, ".git-unavailable"));
-				return fauxAssistantMessage("task failed, here is the result");
-			},
-		]);
-		expect(await run({ mode: "json" })).toBe(0);
-		expect(harness.faux.state.callCount).toBe(1);
-		expect(stdout).toContain('"status":"unavailable"');
-	});
+	it.each([false, true])(
+		"retains final-text exit 0 after Git becomes unavailable with review=%s",
+		async (completionReview) => {
+			const { harness, run } = await setup();
+			harness.setResponses([
+				() => {
+					renameSync(join(harness.tempDir, ".git"), join(harness.tempDir, ".git-unavailable"));
+					return fauxAssistantMessage("task failed, here is the result");
+				},
+			]);
+			expect(await run({ mode: "json", completionReview })).toBe(0);
+			expect(harness.faux.state.callCount).toBe(1);
+			expect(stdout).toContain('"status":"unavailable"');
+			if (completionReview) expect(getCompletionEvents()[0].review).toEqual({ requested: false, sent: false });
+		},
+	);
 
 	it("keeps JSON history and waits for stdout backpressure before a follow-up", async () => {
 		const { harness, run } = await setup();
@@ -401,22 +429,276 @@ describe("runPrintMode same-session completion check", () => {
 		expect(stdout).toContain('"text":"last"');
 	});
 
-	it("preserves runtime rebinding and user messages without automatic continuation into another session", async () => {
-		const first = await setup();
-		const second = await setup();
-		first.harness.setResponses([fauxAssistantMessage("before replacement")]);
-		second.harness.setResponses([fauxAssistantMessage("after replacement")]);
-		const originalPrompt = first.harness.session.prompt.bind(first.harness.session);
-		vi.spyOn(first.harness.session, "prompt").mockImplementationOnce(async (text, options) => {
-			await originalPrompt(text, options);
-			first.host.session = second.harness.session;
-			first.host.cwd = second.harness.tempDir;
-			await first.host.setRebindSession.mock.calls[0]?.[0]?.(second.harness.session);
-		});
-		expect(await first.run({ mode: "json", messages: ["explicit next message"] })).toBe(0);
-		expect(getUserTexts(second.harness)).toEqual(["explicit next message"]);
-		expect(stdout).toContain('"text":"after replacement"');
-		expect(stdout).not.toContain('"type":"completion_check"');
-		expect(first.host.dispose).toHaveBeenCalledTimes(1);
+	it.each([false, true])(
+		"preserves explicit rebinding without automatic continuation with review=%s",
+		async (completionReview) => {
+			const first = await setup();
+			const second = await setup();
+			first.harness.setResponses([fauxAssistantMessage("before replacement")]);
+			second.harness.setResponses([fauxAssistantMessage("after replacement")]);
+			const originalPrompt = first.harness.session.prompt.bind(first.harness.session);
+			vi.spyOn(first.harness.session, "prompt").mockImplementationOnce(async (text, options) => {
+				await originalPrompt(text, options);
+				first.host.session = second.harness.session;
+				first.host.cwd = second.harness.tempDir;
+				await first.host.setRebindSession.mock.calls[0]?.[0]?.(second.harness.session);
+			});
+			expect(await first.run({ mode: "json", completionReview, messages: ["explicit next message"] })).toBe(0);
+			expect(getUserTexts(second.harness)).toEqual(["explicit next message"]);
+			expect(stdout).toContain('"text":"after replacement"');
+			expect(stdout).not.toContain('"type":"completion_check"');
+			expect(first.host.dispose).toHaveBeenCalledTimes(1);
+		},
+	);
+});
+
+describe("opt-in completion self-review", () => {
+	it.each(["text", "json"] as const)(
+		"reviews a clean committed result once in the same session/model in %s mode",
+		async (mode) => {
+			const { harness, host, run } = await setup();
+			const sessionId = harness.session.sessionId;
+			const model = harness.session.model;
+			const prompt = vi.spyOn(harness.session, "prompt");
+			harness.setResponses([
+				() => {
+					commitTask(harness);
+					return fauxAssistantMessage("initial final");
+				},
+				(context) => {
+					expect(context.messages.some((message) => message.role === "assistant")).toBe(true);
+					expect(getUserTexts(harness)[1]).toContain("original visible task");
+					expect(getUserTexts(harness)[1]).toContain("public interfaces and types");
+					expect(getUserTexts(harness)[1]).toContain("after the last edit");
+					return fauxAssistantMessage("reviewed final");
+				},
+				fauxAssistantMessage("must not be used"),
+			]);
+			expect(await run({ mode, completionReview: true })).toBe(0);
+			expect(harness.faux.state.callCount).toBe(2);
+			expect(harness.getPendingResponseCount()).toBe(1);
+			expect(getUserTexts(harness)).toHaveLength(2);
+			expect(prompt.mock.calls[1]?.[1]).toEqual({ expandPromptTemplates: false });
+			expect(harness.session.sessionId).toBe(sessionId);
+			expect(harness.session.model).toBe(model);
+			expect(host.newSession).not.toHaveBeenCalled();
+			expect(host.fork).not.toHaveBeenCalled();
+			expect(host.switchSession).not.toHaveBeenCalled();
+			if (mode === "text") {
+				expect(stdout).toBe("reviewed final\n");
+			} else {
+				const checks = getCompletionEvents();
+				expect(checks.map((event) => [event.attempt, event.status, event.followUpKind, event.review])).toEqual([
+					[0, "follow_up", "review", { requested: true, sent: false }],
+					[0, "follow_up", "review", { requested: true, sent: true }],
+					[1, "passed", undefined, { requested: true, sent: true }],
+				]);
+				expect(checks[0]).toMatchObject({
+					hasNewCommit: true,
+					hasCommittedChanges: true,
+					trackedDirty: false,
+					hasFinalText: true,
+				});
+			}
+		},
+	);
+
+	it("combines review with dirty repair and uses only the shared two-follow-up budget", async () => {
+		const { harness, run } = await setup();
+		harness.setResponses([
+			() => {
+				writeFileSync(join(harness.tempDir, "source.txt"), "unfinished task\n");
+				return fauxAssistantMessage("initial final");
+			},
+			fauxAssistantMessage("reviewed, but work remains"),
+			() => {
+				commitTask(harness);
+				return fauxAssistantMessage("fixed and verified");
+			},
+			fauxAssistantMessage("must not be used"),
+		]);
+		expect(await run({ mode: "json", completionReview: true, completionCheckAttempts: 2 })).toBe(0);
+		expect(harness.faux.state.callCount).toBe(3);
+		expect(harness.getPendingResponseCount()).toBe(1);
+		const users = getUserTexts(harness);
+		expect(users).toHaveLength(3);
+		expect(users[1]).toContain("Final self-review:");
+		expect(users[1]).toContain("tracked changes remain");
+		expect(users[1]).toContain("no new commit since the starting HEAD");
+		expect(users[2]).toContain("tracked changes remain");
+		expect(users[2]).not.toContain("Final self-review:");
+		expect(getCompletionEvents().map((event) => [event.attempt, event.status, event.followUpKind])).toEqual([
+			[0, "follow_up", "review"],
+			[0, "follow_up", "review"],
+			[1, "follow_up", "completion"],
+			[2, "passed", undefined],
+		]);
+		expect(git(harness.tempDir, "status", "--porcelain")).toBe("");
 	});
+
+	it.each([1, 2, 3])(
+		"does not extend a budget of %i or resample an incomplete result with final text",
+		async (attempts) => {
+			const { harness, host, run } = await setup();
+			const head = git(harness.tempDir, "rev-parse", "HEAD");
+			harness.setResponses(Array.from({ length: attempts + 2 }, () => fauxAssistantMessage("Unable to finish.")));
+			expect(await run({ mode: "json", completionReview: true, completionCheckAttempts: attempts })).toBe(0);
+			expect(harness.faux.state.callCount).toBe(attempts + 1);
+			expect(harness.getPendingResponseCount()).toBe(1);
+			expect(getUserTexts(harness).filter((text) => text.includes("Final self-review:"))).toHaveLength(1);
+			expect(getCompletionEvents().at(-1)).toMatchObject({
+				attempt: attempts,
+				status: "exhausted",
+				willFollowUp: false,
+			});
+			expect(git(harness.tempDir, "rev-parse", "HEAD")).toBe(head);
+			expect(host.newSession).not.toHaveBeenCalled();
+			expect(console.error).toHaveBeenCalledWith(`Completion check incomplete after ${attempts} follow-up(s).`);
+		},
+	);
+
+	it.each([[], [fauxThinking("reasoning only")], [{ type: "text" as const, text: " \n " }]])(
+		"keeps missing final-text handling within the shared budget: %j",
+		async (...content) => {
+			const { harness, run } = await setup();
+			harness.setResponses([
+				() => {
+					commitTask(harness);
+					return fauxAssistantMessage(content);
+				},
+				fauxAssistantMessage(content),
+				fauxAssistantMessage(content),
+				fauxAssistantMessage("unused"),
+			]);
+			expect(await run({ completionReview: true })).toBe(2);
+			expect(harness.faux.state.callCount).toBe(3);
+			expect(harness.getPendingResponseCount()).toBe(1);
+			expect(getUserTexts(harness)[1]).toContain("final answer text is missing");
+			expect(getUserTexts(harness)[1]).toContain("Final self-review:");
+			expect(getUserTexts(harness)[2]).not.toContain("Final self-review:");
+			expect(stdout.trim()).toBe("");
+		},
+	);
+
+	it("keeps explicit user prompts before the single review", async () => {
+		const { harness, run } = await setup();
+		harness.setResponses([
+			fauxAssistantMessage("first"),
+			() => {
+				commitTask(harness);
+				return fauxAssistantMessage("second");
+			},
+			fauxAssistantMessage("reviewed"),
+		]);
+		expect(await run({ completionReview: true, messages: ["Explicit extra requirement."] })).toBe(0);
+		expect(getUserTexts(harness).slice(0, 2)).toEqual([
+			"Complete the task and commit the changes.",
+			"Explicit extra requirement.",
+		]);
+		expect(getUserTexts(harness)[2]).toContain("Final self-review:");
+		expect(harness.faux.state.callCount).toBe(3);
+	});
+
+	it("rejects review without the check before binding extensions or prompting", async () => {
+		const { harness, run } = await setup({}, false);
+		const bind = vi.spyOn(harness.session, "bindExtensions");
+		expect(await run({ completionCheck: undefined, completionReview: true })).toBe(1);
+		expect(bind).not.toHaveBeenCalled();
+		expect(harness.faux.state.callCount).toBe(0);
+	});
+
+	it("records requested but not sent when the review prompt fails preflight", async () => {
+		const { harness, run } = await setup();
+		harness.setResponses([
+			() => {
+				commitTask(harness);
+				return fauxAssistantMessage("initial final");
+			},
+		]);
+		const originalPrompt = harness.session.prompt.bind(harness.session);
+		vi.spyOn(harness.session, "prompt")
+			.mockImplementationOnce(originalPrompt)
+			.mockRejectedValueOnce(new Error("review preflight failed"));
+		expect(await run({ mode: "json", completionReview: true })).toBe(1);
+		expect(harness.faux.state.callCount).toBe(1);
+		expect(getUserTexts(harness)).toHaveLength(1);
+		expect(getCompletionEvents()).toHaveLength(1);
+		expect(getCompletionEvents()[0].review).toEqual({ requested: true, sent: false });
+	});
+
+	it.each(["error", "aborted", "recovered retry"] as const)(
+		"retains a sent receipt if review ends with %s",
+		async (outcome) => {
+			const { harness, run } = await setup({
+				settings: { retry: { enabled: true, maxRetries: 1, baseDelayMs: 1 } },
+			});
+			harness.setResponses([
+				() => {
+					commitTask(harness);
+					return fauxAssistantMessage("initial final");
+				},
+				fauxAssistantMessage("", {
+					stopReason: outcome === "aborted" ? "aborted" : "error",
+					errorMessage: outcome === "recovered retry" ? "overloaded_error" : "terminal review failure",
+				}),
+				fauxAssistantMessage("recovered final"),
+				fauxAssistantMessage("unused"),
+			]);
+			expect(await run({ mode: "json", completionReview: true })).toBe(outcome === "recovered retry" ? 0 : 1);
+			expect(harness.faux.state.callCount).toBe(outcome === "recovered retry" ? 3 : 2);
+			expect(getUserTexts(harness)).toHaveLength(2);
+			expect(getCompletionEvents().map((event) => event.review)).toEqual([
+				{ requested: true, sent: false },
+				{ requested: true, sent: true },
+			]);
+		},
+	);
+
+	it.each(["signal", "session", "cwd"] as const)(
+		"does not send review after %s changes while stdout is blocked",
+		async (interruption) => {
+			const first = await setup();
+			first.harness.setResponses([
+				() => {
+					commitTask(first.harness);
+					return fauxAssistantMessage("initial final");
+				},
+				fauxAssistantMessage("must not be used"),
+			]);
+			let release: () => void = () => {};
+			const blocked = new Promise<void>((resolve) => {
+				release = resolve;
+			});
+			vi.mocked(output.waitForRawStdoutBackpressure).mockImplementation(async () => {
+				if (stdout.includes('"followUpKind":"review"') && first.harness.faux.state.callCount === 1) await blocked;
+			});
+			const running = first.run({ mode: "json", completionReview: true });
+			try {
+				await vi.waitFor(() => expect(getCompletionEvents()).toHaveLength(1));
+				expect(getCompletionEvents()[0].review).toEqual({ requested: true, sent: false });
+				expect(getUserTexts(first.harness)).toHaveLength(1);
+				if (interruption === "signal") {
+					const exit = vi.spyOn(process, "exit").mockImplementation(() => undefined as never);
+					process.emit("SIGINT");
+					await vi.waitFor(() => expect(exit).toHaveBeenCalledWith(130));
+				} else if (interruption === "session") {
+					const second = await setup();
+					second.harness.session.agent.state.messages = [fauxAssistantMessage("replacement final")];
+					first.host.session = second.harness.session;
+					first.host.cwd = second.harness.tempDir;
+					await first.host.setRebindSession.mock.calls[0]?.[0]?.(second.harness.session);
+					expect(second.harness.faux.state.callCount).toBe(0);
+				} else {
+					first.host.cwd = join(first.harness.tempDir, "other-workspace");
+				}
+			} finally {
+				release();
+			}
+			expect(await running).toBe(0);
+			expect(first.harness.faux.state.callCount).toBe(1);
+			expect(first.harness.getPendingResponseCount()).toBe(1);
+			expect(getCompletionEvents()).toHaveLength(1);
+			expect(getCompletionEvents()[0].review).toEqual({ requested: true, sent: false });
+		},
+	);
 });
