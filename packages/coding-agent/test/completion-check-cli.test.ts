@@ -6,9 +6,10 @@ import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
 
 const roots: string[] = [];
-const cli = fileURLToPath(new URL("../../../apps/cli/src/main.ts", import.meta.url));
+// test.sh and CI build workspace entrypoints before running tests. Exercise that
+// CLI without recompiling its complete TypeScript graph for every isolated fixture.
+const cli = fileURLToPath(new URL("../../../apps/cli/dist/main.js", import.meta.url));
 const fixture = fileURLToPath(new URL("./fixtures/completion-check-provider.ts", import.meta.url));
-const tsconfig = fileURLToPath(new URL("../../../tsconfig.json", import.meta.url));
 
 function runCli(flags: string[], repository: boolean) {
 	const root = mkdtempSync(join(tmpdir(), "completion-cli-"));
@@ -61,9 +62,6 @@ function runCli(flags: string[], repository: boolean) {
 	const result = spawnSync(
 		process.execPath,
 		[
-			fileURLToPath(import.meta.resolve("tsx/cli")),
-			"--tsconfig",
-			tsconfig,
 			cli,
 			"--provider",
 			"completion-offline",
