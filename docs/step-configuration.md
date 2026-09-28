@@ -30,9 +30,12 @@ with `nonInteractiveApproval = "allow"`.
 
 By default, a run without an approval channel terminates after such a block.
 `--non-interactive-denial continue` (or `STEP_NON_INTERACTIVE_DENIAL=continue`)
-keeps the call blocked but reports it as a failed tool result, so an unattended
-agent can take a safer route instead of ending the run. Explicit denials —
-read-only mode and `deny` tool overrides — still terminate.
+keeps a recoverable confirmation blocked but reports it as a failed tool result,
+so an unattended agent can take a safer route instead of ending the run.
+Unsupported shells and shell-configuration failures still terminate because the
+agent cannot repair the execution environment by retrying. Explicit denials —
+read-only mode and `deny` tool overrides — still terminate, and dangerous
+commands remain blocked.
 
 See [command permissions](command-permissions.md) for matching behavior and
 how to extend the built-in rules.

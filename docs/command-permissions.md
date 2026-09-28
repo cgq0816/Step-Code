@@ -16,9 +16,11 @@ Explicit user approval applies only to that call.
 
 Without an approval channel, a deny ends the run by default. The opt-in
 `nonInteractiveDenial: "continue"` (CLI `--non-interactive-denial continue`,
-env `STEP_NON_INTERACTIVE_DENIAL=continue`) keeps the call blocked but returns
-the block as a failed tool result so the agent can continue; explicit per-tool
-denial and read-only mode still terminate.
+env `STEP_NON_INTERACTIVE_DENIAL=continue`) keeps a recoverable confirmation
+blocked but returns it as a failed tool result so the agent can continue.
+Unsupported shells and shell-configuration failures still terminate because a
+model retry cannot repair the execution environment. Explicit per-tool denial
+and read-only mode still terminate, and dangerous commands remain blocked.
 
 The product policy in `packages/coding-agent/src/step/permissions.ts` runs through
 the existing `tool_call` hook, before foreground/background execution. Clients

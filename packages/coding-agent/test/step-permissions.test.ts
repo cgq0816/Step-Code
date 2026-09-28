@@ -256,6 +256,25 @@ describe("Step permission presets", () => {
 			expect((result as { terminate?: boolean }).terminate).toBeUndefined();
 		});
 
+		it.each([
+			["unsupported-shell", { shellPath: process.execPath }],
+			["shell-configuration", { shellPath: `${process.cwd()}/.missing-step-shell` }],
+		])("terminates environmental analysis failures in continue mode (%s)", async (reason, shellContext) => {
+			const controller = new StepPermissionController({
+				approvalMode: "auto",
+				nonInteractiveApproval: "allow",
+				nonInteractiveDenial: "continue",
+				shellContext: () => shellContext,
+				env: {},
+			});
+			const result = await controller.handleToolCall(
+				{ toolName: "run_command", input: { command: "printf safe" } } as never,
+				noUI,
+			);
+			expect(result).toMatchObject({ block: true, terminate: true });
+			expect((result as { reason: string }).reason).toContain(reason);
+		});
+
 		it("keeps explicit denials terminating even with continue", async () => {
 			const readOnly = new StepPermissionController({
 				initialPreset: "read-only",
@@ -278,6 +297,40 @@ describe("Step permission presets", () => {
 				block: true,
 				terminate: true,
 			});
+		});
+
+		it("keeps refused-policy guidance in continue mode", async () => {
+			const controller = new StepPermissionController({
+				approvalMode: "confirm",
+				nonInteractiveApproval: "deny",
+				nonInteractiveDenial: "continue",
+				env: {},
+			});
+			const result = await controller.handleToolCall(
+				{ toolName: "write_file", input: { path: "x", content: "y" } } as never,
+				noUI,
+			);
+			expect(result).toMatchObject({ block: true });
+			expect((result as { terminate?: boolean }).terminate).toBeUndefined();
+			const reason = (result as { reason: string }).reason;
+			expect(reason).toContain("--non-interactive-approval allow");
+			expect(reason).toContain("--approval-mode auto");
+		});
+
+		it("keeps unconfigured-policy guidance in continue mode", async () => {
+			const controller = new StepPermissionController({
+				nonInteractiveDenial: "continue",
+				env: {},
+			});
+			const result = await controller.handleToolCall(
+				{ toolName: "write_file", input: { path: "x", content: "y" } } as never,
+				noUI,
+			);
+			expect(result).toMatchObject({ block: true });
+			expect((result as { terminate?: boolean }).terminate).toBeUndefined();
+			const reason = (result as { reason: string }).reason;
+			expect(reason).toContain("--non-interactive-approval allow");
+			expect(reason).toContain("--approval-mode auto");
 		});
 	});
 
