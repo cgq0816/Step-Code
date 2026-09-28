@@ -23,7 +23,6 @@ import {
 	type SessionEntry,
 	sessionEntryToContextMessages,
 } from "../session-manager.ts";
-import { createSummarySourceReducer } from "./summary-overflow.ts";
 import {
 	collectSkillInstructions,
 	formatSkillInstructions,
@@ -32,6 +31,7 @@ import {
 	type SkillInstructionContext,
 	stripSkillInstructions,
 } from "./skill-instructions.ts";
+import { createSummarySourceReducer } from "./summary-overflow.ts";
 import {
 	computeFileLists,
 	createFileOps,
