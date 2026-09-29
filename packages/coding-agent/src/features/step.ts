@@ -19,6 +19,7 @@ import {
 	StepPermissionController,
 	type StepPermissionControllerOptions,
 } from "../step/permissions.ts";
+import { createStepPluginResourcesExtension } from "../step/plugins.ts";
 import type { StepSettingsManager } from "../step/settings-manager.ts";
 import { recordStepSlashCommand, registerStepPiCommandAdapters } from "../step/slash-commands.ts";
 import { type StepTelemetryReporter, trackStepTelemetry } from "../step/telemetry.ts";
@@ -110,6 +111,9 @@ export function createStepExtension(options: StepExtensionOptions = {}): Extensi
 		// bridge is loaded as part of the Step product extension so ordinary Pi
 		// sessions remain unchanged.
 		createStepMcpExtension()(pi);
+		// The same plugins also contribute skills and commands, which the resource
+		// loader reads from agent/project directories rather than the plugin root.
+		createStepPluginResourcesExtension()(pi);
 		registerStepPiCommandAdapters(pi, options.telemetry, options.stepSettings, options.feedbackIdentity);
 		const builtInSlashCommands = new Set(BUILTIN_SLASH_COMMANDS.map((command) => command.name));
 		// Extension commands are wrapped at registration time below. Inputs that
