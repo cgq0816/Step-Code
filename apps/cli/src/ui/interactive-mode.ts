@@ -163,6 +163,11 @@ import { handleCtrlC, handleCtrlD } from "./runtime/interrupt.ts";
 import { PastedImageRegistry, resolvePastedImages } from "./runtime/pasted-images.ts";
 import { createRedraw, type Redraw } from "./runtime/redraw.ts";
 import { handleSessionEvent, subscribeToAgent } from "./runtime/session-events.ts";
+import {
+	keepLatestTaskUpdateResult,
+	registerTaskUpdateCall,
+	resetTaskUpdateTranscript,
+} from "./runtime/task-update-transcript.ts";
 import { FooterComponent, formatTokens } from "./view/chrome/footer.ts";
 import {
 	BranchSummaryStatusIndicator,
@@ -3582,6 +3587,7 @@ export class InteractiveMode {
 		items: readonly RenderSessionItem[],
 		options: { updateFooter?: boolean; populateHistory?: boolean } = {},
 	): void {
+		resetTaskUpdateTranscript(this.chatContainer);
 		this.pendingTools.clear();
 		const renderedPendingTools = new Map<string, ToolExecutionComponent>();
 		// Cache-miss notices are not persisted; re-derive them from the full entry
@@ -3628,6 +3634,9 @@ export class InteractiveMode {
 						);
 						component.setExpanded(this.toolOutputExpanded);
 						this.chatContainer.addChild(component);
+						if (content.name === "task_update") {
+							registerTaskUpdateCall(this.chatContainer, content.id);
+						}
 
 						if (message.stopReason === "aborted" || message.stopReason === "error") {
 							let errorMessage: string;
@@ -3644,6 +3653,7 @@ export class InteractiveMode {
 								content: [{ type: "text", text: errorMessage }],
 								isError: true,
 							});
+							keepLatestTaskUpdateResult(this.chatContainer, content.id, component, true);
 						} else {
 							renderedPendingTools.set(content.id, component);
 						}
@@ -3658,6 +3668,7 @@ export class InteractiveMode {
 				const component = renderedPendingTools.get(message.toolCallId);
 				if (component) {
 					component.updateResult(message);
+					keepLatestTaskUpdateResult(this.chatContainer, message.toolCallId, component, message.isError);
 					renderedPendingTools.delete(message.toolCallId);
 				}
 			} else {
