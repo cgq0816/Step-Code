@@ -110,6 +110,22 @@ export interface ExtensionUIDialogOptions {
 	 * drift is visible because no output follows the dialog to fill the gap back in.
 	 */
 	overlay?: boolean;
+	/**
+	 * Reference lines for an input dialog, rendered under the title and above the
+	 * editable row. Use them to show the accepted spellings of an answer that has
+	 * more than one (a git URL, an owner/repo pair, a local path), so the accepted
+	 * forms are visible while typing instead of only in the placeholder that
+	 * disappears on the first keystroke. Ignored by select, confirm and editor
+	 * dialogs, and by hosts that render dialogs as plain transport.
+	 */
+	examples?: readonly string[];
+	/**
+	 * Add a search row to a select dialog and filter its options as the user
+	 * types. Use it for lists whose length is set by the environment rather than
+	 * by the dialog — a marketplace can carry hundreds of plugins, and scrolling
+	 * is not a way to find one. Ignored by non-select dialogs.
+	 */
+	searchable?: boolean;
 }
 
 /** Placement for extension widgets. */

@@ -2927,6 +2927,7 @@ export class InteractiveMode {
 						timeout: opts?.timeout,
 						onToggleToolsExpanded: () => this.toggleToolOutputExpansion(),
 						presentation: this.presentation,
+						searchable: opts?.searchable,
 					},
 				);
 				this.extensionSelector = selector;
@@ -3008,6 +3009,7 @@ export class InteractiveMode {
 					tui: this.ui,
 					timeout: opts?.timeout,
 					presentation: this.presentation,
+					examples: opts?.examples,
 				});
 				this.extensionInput = input;
 				unmount = this.mountExtensionDialog(input, opts);
