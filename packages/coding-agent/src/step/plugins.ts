@@ -645,12 +645,11 @@ export async function diagnoseStepPlugin(
 	if (read.manifest.entry)
 		warnings.push("Executable plugin entries are recorded but not loaded by the Step marketplace facade.");
 	// Judged against the environment the matching servers are actually spawned
-	// with: `connectStepMcpServer` layers the process environment, the server's
-	// own declared `env`, and the Step login credential. Checking `process.env`
-	// alone reported every logged-in user as missing a variable they were never
-	// expected to export by hand. Only an inline `mcpServers` record can start a
-	// server — discovery skips a string declaration path — so that is the only
-	// shape whose declared `env` can satisfy a requirement.
+	// with: `connectStepMcpServer` layers the SDK's safe inherited environment,
+	// the server's own declared `env`, and the Step login credential. Only an
+	// inline `mcpServers` record can start a server — discovery skips a string
+	// declaration path — so that is the only shape whose declared `env` can
+	// satisfy a requirement.
 	const requiredEnvironment = read.manifest.provision?.requiresEnv ?? [];
 	if (requiredEnvironment.length > 0) {
 		const candidates = provisionedServerEnvironments(read.manifest).map((declared) =>
@@ -665,12 +664,12 @@ export async function diagnoseStepPlugin(
 		const missingOther = missingEnvironment.filter((name) => !STEP_LOGIN_SUPPLIED_ENV.includes(name));
 		if (missingLogin.length > 0) {
 			warnings.push(
-				`Plugin provisioning has no value for ${missingLogin.join(", ")}; run /login or export it before using this plugin.`,
+				`Plugin provisioning has no value for ${missingLogin.join(", ")}; run /login or declare it in the plugin's mcpServers env before using this plugin.`,
 			);
 		}
 		if (missingOther.length > 0) {
 			warnings.push(
-				`Plugin provisioning has no value for ${missingOther.join(", ")}; export it or declare it in the plugin's mcpServers env before using this plugin.`,
+				`Plugin provisioning has no value for ${missingOther.join(", ")}; declare it in the plugin's mcpServers env before using this plugin.`,
 			);
 		}
 	}
