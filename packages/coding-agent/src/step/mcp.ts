@@ -365,7 +365,10 @@ export async function discoverStepMcpServers(cwd: string, projectTrusted: boolea
 				seen.add(name);
 				const discovered: DiscoveredServer = {
 					name,
-					declaration: applyPluginHeaderAliases(normalizeDeclaration(value), value),
+					declaration: anchorPluginServerCwd(
+						pluginDir,
+						applyPluginHeaderAliases(normalizeDeclaration(value), value),
+					),
 				};
 				if (parsed.manifest.provision) discovered.provision = parsed.manifest.provision;
 				result.push(discovered);
@@ -373,6 +376,25 @@ export async function discoverStepMcpServers(cwd: string, projectTrusted: boolea
 		}
 	}
 	return result;
+}
+
+/**
+ * Run a plugin's stdio server from the plugin root.
+ *
+ * Without this the child inherited the directory `step` was launched from, so a
+ * manifest such as `{"command":"node","args":["server/index.mjs"]}` could not
+ * find its own script. A relative `cwd` is read against the plugin root, and one
+ * that escapes the plugin falls back to the root; an absolute `cwd` is the
+ * author's explicit choice and is kept. This stays out of `normalizeDeclaration`
+ * because `config.toml` shares it, and there a relative `cwd` keeps meaning the
+ * process directory.
+ */
+function anchorPluginServerCwd(pluginDir: string, declaration: ServerDeclaration): ServerDeclaration {
+	if (typeof declaration.command !== "string") return declaration;
+	const declared = declaration.cwd ?? "";
+	if (path.isAbsolute(declared)) return declaration;
+	const resolved = path.resolve(pluginDir, declared);
+	return { ...declaration, cwd: isPathContained(pluginDir, resolved) ? resolved : path.resolve(pluginDir) };
 }
 
 /** True when a declaration names either transport: a stdio command or a url. */

@@ -320,6 +320,68 @@ test("expands header templates and reports a variable with no fallback", () => {
 	delete process.env.STEP_TEST_PRESENT;
 });
 
+test("a plugin stdio server runs from the plugin root unless it names an absolute cwd", async () => {
+	const dir = "/mock-plugins/local";
+	pluginMocks.dirs = [dir];
+	pluginMocks.manifests.set(dir, {
+		id: "local",
+		mcpServers: {
+			bare: { command: "node", args: ["server/index.mjs"] },
+			dot: { command: "node", cwd: "." },
+			nested: { command: "node", cwd: "server" },
+			escapes: { command: "node", cwd: ".." },
+			absolute: { command: "node", cwd: "/opt/elsewhere" },
+			remote: { url: "https://example.test/mcp" },
+		},
+	});
+	const discovered = await discoverStepMcpServers(process.cwd(), false);
+	const cwdOf = (server: string) => discovered.find((entry) => entry.name === `local__${server}`)?.declaration.cwd;
+	expect(cwdOf("bare")).toBe(dir);
+	expect(cwdOf("dot")).toBe(dir);
+	expect(cwdOf("nested")).toBe(join(dir, "server"));
+	expect(cwdOf("escapes")).toBe(dir);
+	expect(cwdOf("absolute")).toBe("/opt/elsewhere");
+	// A remote server is never spawned, so it is given no working directory.
+	expect(cwdOf("remote")).toBeUndefined();
+});
+
+test("a plugin stdio server with a relative script starts when step runs elsewhere", async () => {
+	const root = await mkdtemp(join(await realpath(tmpdir()), "mcp-plugin-cwd-"));
+	cleanups.push(async () => rm(root, { recursive: true, force: true }));
+	const dir = join(root, "plugin");
+	await mkdir(join(dir, "server"), { recursive: true });
+	// A minimal newline-delimited JSON-RPC server: enough for the handshake and one tool.
+	await writeFile(
+		join(dir, "server", "index.mjs"),
+		`import { createInterface } from "node:readline";
+const send = (message) => process.stdout.write(JSON.stringify({ jsonrpc: "2.0", ...message }) + "\\n");
+createInterface({ input: process.stdin }).on("line", (line) => {
+	const { id, method, params } = JSON.parse(line);
+	if (id === undefined) return;
+	if (method === "initialize") {
+		send({ id, result: { protocolVersion: params.protocolVersion, capabilities: { tools: {} }, serverInfo: { name: "probe", version: "1" } } });
+	} else if (method === "tools/list") {
+		send({ id, result: { tools: [{ name: "where", inputSchema: { type: "object" } }] } });
+	} else {
+		send({ id, error: { code: -32601, message: method } });
+	}
+});
+`,
+	);
+	pluginMocks.dirs = [dir];
+	pluginMocks.manifests.set(dir, {
+		id: "local",
+		mcpServers: { probe: { command: process.execPath, args: ["server/index.mjs"] } },
+	});
+	// The test process is not in the plugin directory, which is the whole point.
+	expect(process.cwd()).not.toBe(dir);
+
+	const harness = await setup("tui");
+	await harness.start();
+	await vi.waitFor(() => expect(harness.extension.tools.size).toBe(1));
+	expect(getStepMcpStatuses()).toContainEqual({ name: "local__probe", status: "connected", toolCount: 1 });
+});
+
 test("resolves a plugin whose mcpServers points at a sibling .mcp.json", async () => {
 	const server = await slowServer(1);
 	// The string form names a real file, so this needs a real directory on disk.
