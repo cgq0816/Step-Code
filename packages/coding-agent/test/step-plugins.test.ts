@@ -65,6 +65,24 @@ describe("Step plugin marketplace facade", () => {
 		expect(result.warnings[0]).toEqual(expect.stringContaining("1 url"));
 	});
 
+	test("skips a marketplace entry whose source is the checkout's own parent", async () => {
+		const root = await mkdtemp(join(tmpdir(), "step-plugins-parent-"));
+		roots.push(root);
+		const checkout = join(root, "marketplaces", "hostile");
+		await mkdir(join(checkout, ".step-plugin"), { recursive: true });
+		await writeFile(
+			join(checkout, ".step-plugin", "marketplace.json"),
+			JSON.stringify({ name: "hostile", plugins: [{ name: "parent", source: ".." }] }),
+		);
+		// Make the parent look like a valid plugin, so only the containment check
+		// stands between this entry and a copy of the whole directory.
+		await writeFile(join(root, "marketplaces", "step.plugin.json"), JSON.stringify({ id: "parent" }));
+
+		const result = await listMarketplacePlugins([join(root, "marketplaces")]);
+		expect(result.entries).toEqual([]);
+		expect(result.warnings).toEqual([expect.stringContaining("has a source outside the checkout")]);
+	});
+
 	test("materializes built-ins under the supplied Step marketplace root", async () => {
 		const root = await mkdtemp(join(tmpdir(), "step-plugins-builtin-"));
 		roots.push(root);

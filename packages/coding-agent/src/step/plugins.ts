@@ -18,6 +18,7 @@ import { BorderedLoader } from "../components/bordered-loader.ts";
 import type { ExtensionAPI, ExtensionCommandContext, ExtensionFactory } from "../core/extensions/types.ts";
 import { resolveStepConfigDir } from "./environment.ts";
 import { resolveStepMcpEnvironment, STEP_LOGIN_SUPPLIED_ENV } from "./mcp-environment.ts";
+import { isPathContained } from "./path-containment.ts";
 import { resolveStepStorageRoot } from "./storage-root.ts";
 import { type StepTelemetryReporter, trackStepTelemetry } from "./telemetry.ts";
 
@@ -195,11 +196,6 @@ function pathExists(candidate: string): Promise<boolean> {
 
 function isSafeName(value: string): boolean {
 	return SAFE_NAME.test(value) && value !== "." && value !== "..";
-}
-
-function isContained(root: string, candidate: string): boolean {
-	const relative = path.relative(path.resolve(root), path.resolve(candidate));
-	return relative === "" || (!relative.startsWith(`..${path.sep}`) && !path.isAbsolute(relative));
 }
 
 function normalizeRelativePath(value: unknown): string | undefined {
@@ -468,7 +464,7 @@ export async function listMarketplacePlugins(
 						? value.source.trim()
 						: path.join("plugins", name);
 				const sourcePath = path.resolve(marketplaceDir, relative);
-				if (!isContained(marketplaceDir, sourcePath)) {
+				if (!isPathContained(marketplaceDir, sourcePath)) {
 					warnings.push(
 						`Marketplace '${marketplaceName}' entry '${name}' has a source outside the checkout; skipped.`,
 					);
@@ -514,7 +510,7 @@ export async function installMarketplacePlugin(
 ): Promise<{ installedPath: string; warnings: string[]; diagnostics: StepPluginDiagnostics }> {
 	if (!isSafeName(entry.name)) throw new Error(`'${entry.name}' is not a safe plugin name.`);
 	const target = path.resolve(pluginsDir, entry.name);
-	if (!isContained(pluginsDir, target) || path.basename(target) !== entry.name)
+	if (!isPathContained(pluginsDir, target) || path.basename(target) !== entry.name)
 		throw new Error(`'${entry.name}' is not an installed plugin name.`);
 	if (await pathExists(target))
 		throw new Error(`Plugin '${entry.name}' is already installed at ${target}. Remove it first.`);
@@ -615,7 +611,7 @@ export async function uninstallPlugin(pluginsDir: string, name: string): Promise
 	if (!isSafeName(name.trim())) throw new Error(`'${name}' is not an installed plugin name.`);
 	const root = path.resolve(pluginsDir);
 	const target = path.resolve(root, name.trim());
-	if (!isContained(root, target) || path.dirname(target) !== root)
+	if (!isPathContained(root, target) || path.dirname(target) !== root)
 		throw new Error(`'${name}' is not an installed plugin name.`);
 	const stat = await fs.lstat(target).catch(() => undefined);
 	if (!stat?.isDirectory()) throw new Error(`Plugin '${name}' is not installed in ${root}.`);
@@ -635,7 +631,7 @@ export async function diagnoseStepPlugin(
 	const mcpServers: string[] = [];
 	if (typeof read.manifest.mcpServers === "string") {
 		const declarationPath = path.resolve(pluginDir, read.manifest.mcpServers);
-		if (!isContained(pluginDir, declarationPath)) {
+		if (!isPathContained(pluginDir, declarationPath)) {
 			warnings.push(`MCP declaration ${read.manifest.mcpServers} escapes ${pluginDir}.`);
 		} else if (!(await pathExists(declarationPath))) {
 			warnings.push(`MCP declaration ${read.manifest.mcpServers} is missing from ${pluginDir}.`);
@@ -758,7 +754,7 @@ export async function discoverStepPluginResourcePaths(input: {
 					declared !== undefined ? declared : (await pathExists(path.join(pluginDir, key))) ? [key] : [];
 				for (const relative of candidates) {
 					const resolved = path.resolve(pluginDir, relative);
-					if (!isContained(pluginDir, resolved)) {
+					if (!isPathContained(pluginDir, resolved)) {
 						warnings.push(
 							`Plugin '${manifest.id}' declares ${key} '${relative}', which is outside the plugin; skipped.`,
 						);
@@ -848,7 +844,7 @@ export async function ensureBuiltinMarketplace(
 		await fs.rm(target, { recursive: true, force: true });
 		for (const [relative, contents] of Object.entries(BUILTIN_MARKETPLACE_FILES)) {
 			const resolved = path.resolve(target, relative);
-			if (!isContained(target, resolved))
+			if (!isPathContained(target, resolved))
 				return { path: target, warnings: [`Built-in marketplace entry ${relative} escapes its directory.`] };
 			await fs.mkdir(path.dirname(resolved), { recursive: true });
 			await fs.writeFile(resolved, contents, "utf8");
@@ -1039,8 +1035,8 @@ export async function addMarketplaceSource(input: {
 		const resolvedTarget = path.resolve(target);
 		if (
 			resolvedSource === resolvedTarget ||
-			isContained(resolvedSource, resolvedTarget) ||
-			isContained(resolvedTarget, resolvedSource)
+			isPathContained(resolvedSource, resolvedTarget) ||
+			isPathContained(resolvedTarget, resolvedSource)
 		) {
 			return {
 				warnings: [
@@ -1133,7 +1129,7 @@ export async function removeMarketplaceSource(input: {
 		return { warnings: [`Marketplace '${name}' cannot be removed.`] };
 	const root = input.marketplacesDir ?? defaultStepMarketplacesDir();
 	const target = path.resolve(root, name);
-	if (!isContained(root, target) || path.dirname(target) !== path.resolve(root))
+	if (!isPathContained(root, target) || path.dirname(target) !== path.resolve(root))
 		return { warnings: [`Marketplace '${name}' is not a valid name.`] };
 	if (!(await pathExists(target))) return { warnings: [`No marketplace named '${name}' is configured.`] };
 	const isGitCheckout = await pathExists(path.join(target, ".git"));

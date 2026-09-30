@@ -13,6 +13,7 @@ import { readGlobalStepConfig } from "./config-toml.ts";
 import { createMcpToolCaller, listAllMcpTools } from "./mcp-client.ts";
 import { resolveStepMcpEnvironment } from "./mcp-environment.ts";
 import { createStoredMcpOAuthProvider, hasStoredMcpOAuthCredential } from "./mcp-oauth.ts";
+import { isPathContained } from "./path-containment.ts";
 import {
 	defaultStepPluginsDir,
 	ensureBuiltinPluginsInstalled,
@@ -409,12 +410,6 @@ export function expandHeaderTemplate(template: string): string | undefined {
 	return missing ? undefined : expanded;
 }
 
-/** True when `candidate` stays inside `root`, so a manifest cannot read elsewhere. */
-function isInside(root: string, candidate: string): boolean {
-	const relative = path.relative(path.resolve(root), path.resolve(candidate));
-	return relative === "" || (!relative.startsWith(`..${path.sep}`) && !path.isAbsolute(relative));
-}
-
 /**
  * Resolve a manifest's `mcpServers` into a server map.
  *
@@ -432,7 +427,7 @@ async function resolveDeclaredServers(
 	if (isRecord(declared)) return declared;
 	if (typeof declared !== "string" || !declared.trim()) return undefined;
 	const resolved = path.resolve(pluginDir, declared);
-	if (!isInside(pluginDir, resolved)) return undefined;
+	if (!isPathContained(pluginDir, resolved)) return undefined;
 	try {
 		const raw = JSON.parse(await readFile(resolved, "utf8")) as unknown;
 		// The file may hold the map directly or wrap it under `mcpServers`, the
