@@ -534,24 +534,34 @@ try {
 				}
 			}
 		} else if (topLevelAuthHelp) {
-			process.stdout.write("Usage: step login\nSign in with the Step account and store a credential.\n");
+			process.stdout.write(
+				"Usage: step login [--no-browser]\nSign in with the Step account and store a credential.\n\n  --no-browser  Print the sign-in URL instead of opening a browser.\n",
+			);
 		} else if (process.stdin.isTTY !== true || process.stdout.isTTY !== true) {
 			process.stderr.write(
 				"step login needs an interactive terminal. Set STEP_API_KEY instead, or run it from a terminal.\n",
 			);
 			process.exitCode = 1;
 		} else {
-			const outcome = await runStepLogin({
-				authPath: getStepAuthPath(),
-				themeName: getStepDefaultTheme(),
-			});
-			if (outcome.kind === "completed") {
-				syncStepLoginProfileEndpoint(getStepAuthPath());
-				process.stdout.write(`Signed in${outcome.profile ? ` with ${outcome.profile.title}` : ""}.\n`);
-				if (outcome.credentialsPath) process.stdout.write(`Credential written: ${outcome.credentialsPath}\n`);
-			} else {
-				process.stderr.write("Sign-in cancelled. No credential was written.\n");
+			const loginArgs = process.argv.slice(3);
+			const unknownLoginArg = loginArgs.find((arg) => arg !== "--no-browser");
+			if (unknownLoginArg) {
+				process.stderr.write(`Unknown option "${unknownLoginArg}" for "login".\n`);
 				process.exitCode = 1;
+			} else {
+				const outcome = await runStepLogin({
+					authPath: getStepAuthPath(),
+					themeName: getStepDefaultTheme(),
+					noBrowser: loginArgs.includes("--no-browser"),
+				});
+				if (outcome.kind === "completed") {
+					syncStepLoginProfileEndpoint(getStepAuthPath());
+					process.stdout.write(`Signed in${outcome.profile ? ` with ${outcome.profile.title}` : ""}.\n`);
+					if (outcome.credentialsPath) process.stdout.write(`Credential written: ${outcome.credentialsPath}\n`);
+				} else {
+					process.stderr.write("Sign-in cancelled. No credential was written.\n");
+					process.exitCode = 1;
+				}
 			}
 		}
 	} else if (isTopLevelFeedback) {
