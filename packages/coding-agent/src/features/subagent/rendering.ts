@@ -53,14 +53,31 @@ function formatElapsed(record: StepSubagentResultRecord): string {
 function statusIcon(status: StepSubagentResultRecord["status"], theme: Theme): string {
 	if (status === "running") return theme.fg("warning", "~");
 	if (status === "completed") return theme.fg("success", "\u2713");
+	if (status === "queued") return theme.fg("dim", "\u00b7");
+	if (status === "skipped") return theme.fg("dim", "-");
 	return theme.fg("error", "x");
+}
+
+function chainHeading(records: readonly StepSubagentResultRecord[]): string {
+	const index = records.findIndex(
+		(record) => record.status !== "completed" && record.status !== "queued" && record.status !== "skipped",
+	);
+	if (index !== -1) return `${records[index].status} at step ${index + 1}/${records.length}`;
+	const completed = records.filter((record) => record.status === "completed").length;
+	return completed === records.length
+		? `${completed}/${records.length} steps completed`
+		: `queued at step ${completed + 1}/${records.length}`;
 }
 
 function renderRecordSummary(record: StepSubagentResultRecord, theme: Theme): string {
 	const output =
 		record.activeText ||
 		finalOutput(record.messages) ||
-		(record.status === "running" ? "(running...)" : resultText(record));
+		(record.status === "running"
+			? "(running...)"
+			: record.status === "queued" || record.status === "skipped"
+				? `(${record.status})`
+				: resultText(record));
 	const lines = output.split(/\r?\n/u).filter((line) => line.trim().length > 0);
 	const preview = lines.slice(-COLLAPSED_OUTPUT_LINES).join("\n");
 	const omitted = Math.max(0, lines.length - COLLAPSED_OUTPUT_LINES);
@@ -203,10 +220,14 @@ export class SubagentListWidget implements Component {
 		const theme = this.theme;
 		const running = records.filter((record) => record.status === "running").length;
 		const completed = records.filter((record) => record.status === "completed").length;
-		const failed = records.length - running - completed;
+		const queued = records.filter((record) => record.status === "queued").length;
+		const skipped = records.filter((record) => record.status === "skipped").length;
+		const failed = records.length - running - completed - queued - skipped;
 		const summary = [`${completed}/${records.length} complete`];
 		if (running > 0) summary.push(`${running} running`);
+		if (queued > 0) summary.push(`${queued} queued`);
 		if (failed > 0) summary.push(`${failed} failed`);
+		if (skipped > 0) summary.push(`${skipped} skipped`);
 		const header = ` ${theme.fg("toolTitle", theme.bold(this.title))} ${theme.fg("accent", summary.join(", "))}`;
 		const lines = [visibleWidth(header) > width ? truncateToWidth(header, width, "\u2026") : header];
 
@@ -260,11 +281,14 @@ export function renderSubagentResult(
 		return new Text(text?.type === "text" ? text.text : "(no output)", 0, 0);
 	}
 	const running = details.results.filter((record) => record.status === "running").length;
+	const queued = details.results.filter((record) => record.status === "queued").length;
 	const completed = details.results.filter((record) => record.status === "completed").length;
 	const heading =
 		details.mode === "parallel"
-			? `${completed}/${details.results.length} complete${running > 0 ? `, ${running} running` : ""}`
-			: (details.results[0]?.status ?? "done");
+			? `${completed}/${details.results.length} complete${running > 0 ? `, ${running} running` : ""}${queued > 0 ? `, ${queued} queued` : ""}`
+			: details.mode === "chain"
+				? chainHeading(details.results)
+				: (details.results[0]?.status ?? "done");
 	if (options.expanded) {
 		const container = new Container();
 		container.addChild(new Text(`${theme.bold("agent")} ${theme.fg("accent", heading)}`, 0, 0));

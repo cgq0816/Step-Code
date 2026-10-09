@@ -156,7 +156,12 @@ export interface StepSubagentResultRecord extends StepSubagentRunResult {
 	agent: string;
 	agentSource: StepAgentConfig["source"] | "unknown";
 	task: string;
-	status: "running" | "completed" | "failed" | "aborted";
+	/**
+	 * `queued`: not started yet (a later chain step, or a parallel task waiting
+	 * on maxConcurrency). `skipped`: a chain step that never started because an
+	 * earlier step did not complete.
+	 */
+	status: "queued" | "running" | "completed" | "failed" | "aborted" | "skipped";
 	step?: number;
 	worktreePath?: string;
 	worktreeBranch?: string;
