@@ -57,6 +57,7 @@ function createApi(): { api: ExtensionAPI; tools: Map<string, ToolDefinition>; s
 			tools.set(tool.name, tool);
 		},
 		registerCommand: () => {},
+		registerMessageRenderer: () => {},
 		registerFlag: () => {},
 		registerShortcut: () => {},
 		on: () => {},

@@ -18,6 +18,19 @@ export type BackgroundLaneEvent =
 	| "background_progress"
 	| "background_restarted";
 
+/** `details` on an `<agent-notification>` message; read by its transcript renderer. */
+export interface AgentNotificationDetails {
+	agentId: string;
+	event: BackgroundLaneEvent;
+	status: BackgroundAgentLane["status"];
+	/** Alias when the lane has one, otherwise its id. */
+	label?: string;
+	/** Agent names running in the lane, e.g. ["general"]. */
+	agents?: string[];
+	/** Unescaped body below the headline (output, failure reasons, progress). */
+	detail?: string;
+}
+
 /** Minimum interval between background_progress notifications per lane. */
 const PROGRESS_NOTIFY_INTERVAL_MS = 15_000;
 
@@ -55,6 +68,14 @@ export function notifyLaneEvent(
 					? `Background agent ${label} restarted its child process.`
 					: `Background agent ${label} ${lane.status}.`;
 	const body = detail?.trim() ? `${headline}\n${detail.trim()}` : headline;
+	const details: AgentNotificationDetails = {
+		agentId: lane.id,
+		event,
+		status: lane.status,
+		label,
+		agents: [...new Set(lane.details.results.map((record) => record.agent))],
+		detail: detail?.trim() || undefined,
+	};
 	pi.sendMessage(
 		{
 			customType: "agent-notification",
@@ -66,8 +87,10 @@ export function notifyLaneEvent(
 			content:
 				`<agent-notification agentId="${escapeXmlAttr(lane.id)}" alias="${escapeXmlAttr(label)}" event="${event}" status="${lane.status}">` +
 				`${escapeXmlAttr(body)}</agent-notification>`,
-			display: true,
-			details: { agentId: lane.id, event, status: lane.status },
+			// Progress is for the parent model; the user already watches the lanes
+			// widget, and a transcript entry every 15s per lane buries the session.
+			display: event !== "background_progress",
+			details,
 		},
 		{ deliverAs: "steer" },
 	);
