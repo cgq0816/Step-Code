@@ -81,9 +81,10 @@ export function notifyLaneEvent(
 		// steer alone only appends the message then, so the model never reads the
 		// result until the user types again. Terminal and needs-input events wake
 		// the parent; progress and restart notices ride along with the next turn
-		// instead of waking it every 15s per lane. While the parent is mid-turn
-		// both forms steer into that turn.
-		{ deliverAs: "steer", triggerTurn: WAKING_EVENTS.has(event) },
+		// instead of waking it every 15s per lane. They leave triggerTurn unset
+		// rather than false: an explicit false would defer them to the end of a
+		// running turn instead of steering into it.
+		WAKING_EVENTS.has(event) ? { deliverAs: "steer", triggerTurn: true } : { deliverAs: "steer" },
 	);
 }
 

@@ -479,10 +479,12 @@ test("agent_send validates its target and action inputs", async () => {
 
 test("progress notifications ride along without waking an idle parent", async () => {
 	const { notifyLaneEvent } = await import("../src/features/subagent/lane-events.ts");
-	const sent: Array<{ event?: string; triggerTurn?: boolean }> = [];
+	const sent: Array<{ event?: string; options?: { deliverAs?: string; triggerTurn?: boolean } }> = [];
 	const pi = {
-		sendMessage: (message: { details?: { event?: string } }, options?: { triggerTurn?: boolean }) =>
-			sent.push({ event: message.details?.event, triggerTurn: options?.triggerTurn }),
+		sendMessage: (
+			message: { details?: { event?: string } },
+			options?: { deliverAs?: string; triggerTurn?: boolean },
+		) => sent.push({ event: message.details?.event, options }),
 	} as unknown as ExtensionAPI;
 	const lane = { id: "lane", subscribe: "progress", status: "running", details: { results: [] } } as never;
 
@@ -491,10 +493,12 @@ test("progress notifications ride along without waking an idle parent", async ()
 	notifyLaneEvent(pi, lane, "background_needs_input", "which file?");
 	notifyLaneEvent(pi, lane, "background_failed", "boom");
 
+	// Non-waking events must leave triggerTurn unset, not false: AgentSession
+	// defers an explicit false to the end of a running turn instead of steering.
 	expect(sent).toEqual([
-		{ event: "background_progress", triggerTurn: false },
-		{ event: "background_restarted", triggerTurn: false },
-		{ event: "background_needs_input", triggerTurn: true },
-		{ event: "background_failed", triggerTurn: true },
+		{ event: "background_progress", options: { deliverAs: "steer" } },
+		{ event: "background_restarted", options: { deliverAs: "steer" } },
+		{ event: "background_needs_input", options: { deliverAs: "steer", triggerTurn: true } },
+		{ event: "background_failed", options: { deliverAs: "steer", triggerTurn: true } },
 	]);
 });
