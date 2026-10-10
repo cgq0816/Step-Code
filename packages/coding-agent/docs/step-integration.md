@@ -430,7 +430,7 @@ service and are not silently faked by this fork.
 | Model/provider selection, compaction, resume, fork, new session | Pi native commands and `SessionManager` | aligned |
 | StepCode OAuth login/logout and legacy credential normalization | `features/step-provider`, `step/auth.ts`, `step/models-endpoint-repair.ts` | aligned; endpoint repair is tested |
 | Global/project settings and session paths | Pi managers wrapped by `step/settings-manager.ts` and `step/session.ts` | aligned; writes use `.stepcode` |
-| Step permissions, `/permissions`, `/init` | Step extension/facades over Pi selectors and hooks | aligned; `/effort` is Pi's native `/thinking` alias, while `/permission` and `/mode` remain absent |
+| Step permissions, `/permissions`, `/init` | Step extension/facades over Pi selectors and hooks | aligned; `/effort` replaces Pi's native `/thinking`, while `/permission` and `/mode` remain absent |
 | Built-in `search_web` | Step tool profile backed by `stepsearch.web_search` over Streamable HTTP MCP | aligned; uses search-specific environment overrides and the Step login credential fallback |
 | Top-level `step feedback` and TUI `/feedback` | `step/feedback/`, `stepcode.ts`, and the Step extension over Pi's current session/UI | aligned; the body and optional session bundle use separate Step collector requests |
 | `/status`, self-memory/skills governance, `/refresh`, `/rewind`, `/copy` full-transcript semantics | Previous gateway/TUI product layer | not yet ported; no misleading alias is registered |
