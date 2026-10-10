@@ -239,14 +239,7 @@ export function applyStepKeybindingRemap(keybindings: KeybindingsManager): void 
  * model/effort/mode switches most often, so they lead the list instead of
  * following builtin registration order (feedback issue-c6b8e3bb543482b7).
  */
-const STEP_SLASH_COMMAND_PRIORITY: readonly string[] = [
-	"model",
-	"permissions",
-	"ultracode",
-	"effort",
-	"thinking",
-	"plan",
-];
+const STEP_SLASH_COMMAND_PRIORITY: readonly string[] = ["model", "permissions", "ultracode", "effort", "plan"];
 
 /** Exported for the acceptance test suite (tui-acceptance-interactions.test.ts). */
 // 结构重构（代码结构方案步骤 4）时迁往 ui/runtime/input-dispatch.ts —— 斜杠命令分派属于交互编排。
@@ -891,11 +884,9 @@ export class InteractiveMode {
 			};
 		}
 
-		const thinkingCommands = slashCommands.filter(
-			(command) => command.name === "thinking" || command.name === "effort",
-		);
-		for (const thinkingCommand of thinkingCommands) {
-			thinkingCommand.getArgumentCompletions = (prefix: string): AutocompleteItem[] | null => {
+		const effortCommand = slashCommands.find((command) => command.name === "effort");
+		if (effortCommand) {
+			effortCommand.getArgumentCompletions = (prefix: string): AutocompleteItem[] | null => {
 				return createFuzzyAutocompleteItems(
 					this.session.getAvailableThinkingLevels(),
 					prefix,
@@ -4775,15 +4766,15 @@ export class InteractiveMode {
 			return;
 		}
 
-		this.selectThinkingLevel(level, false);
+		this.selectThinkingLevel(level);
 	}
 
-	private selectThinkingLevel(level: ThinkingLevel, persist: boolean): void {
+	private selectThinkingLevel(level: ThinkingLevel): void {
 		try {
-			this.session.setThinkingLevel(level, { persist });
+			this.session.setThinkingLevel(level, { persist: true });
 			this.footer.invalidate();
 			this.updateEditorBorderColor();
-			this.showStatus(persist ? `Default thinking level: ${level}` : `Thinking level: ${level}`);
+			this.showStatus(`Default thinking level: ${level}`);
 		} catch (error) {
 			this.showError(error instanceof Error ? error.message : String(error));
 		}
@@ -4791,10 +4782,6 @@ export class InteractiveMode {
 
 	private showThinkingSelector(): void {
 		this.showSelector((done) => {
-			const selectLevel = (level: ThinkingLevel, persist: boolean) => {
-				this.selectThinkingLevel(level, persist);
-				done();
-			};
 			const availableLevels = this.session.getAvailableThinkingLevels();
 			const globalDefault = this.settingsManager.getDefaultThinkingLevel() ?? DEFAULT_THINKING_LEVEL;
 			const model = this.session.model;
@@ -4805,12 +4792,14 @@ export class InteractiveMode {
 			const selector = new ThinkingSelectorComponent(
 				this.session.thinkingLevel ?? DEFAULT_THINKING_LEVEL,
 				availableLevels,
-				(level) => selectLevel(level, false),
+				(level) => {
+					this.selectThinkingLevel(level);
+					done();
+				},
 				() => {
 					done();
 					this.redraw.requestRender();
 				},
-				(level) => selectLevel(level, true),
 				defaultMarker,
 			);
 			return { component: selector, focus: selector };

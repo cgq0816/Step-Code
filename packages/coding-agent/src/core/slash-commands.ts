@@ -25,13 +25,8 @@ export const BUILTIN_SLASH_COMMANDS: ReadonlyArray<BuiltinSlashCommand> = [
 	},
 	{ name: "tree", description: "Navigate session tree (switch branches)" },
 	{
-		name: "thinking",
-		description: "Set thinking level",
-		argumentHint: "<level>",
-	},
-	{
 		name: "effort",
-		description: "Set thinking level (alias for /thinking)",
+		description: "Set thinking level",
 		argumentHint: "<level>",
 	},
 	{
