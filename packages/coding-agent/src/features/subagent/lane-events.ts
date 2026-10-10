@@ -18,6 +18,14 @@ export type BackgroundLaneEvent =
 	| "background_progress"
 	| "background_restarted";
 
+/** Events that start a parent turn when the parent is idle. */
+const WAKING_EVENTS: ReadonlySet<BackgroundLaneEvent> = new Set([
+	"background_done",
+	"background_failed",
+	"background_interrupted",
+	"background_needs_input",
+]);
+
 /** `details` on an `<agent-notification>` message; read by its transcript renderer. */
 export interface AgentNotificationDetails {
 	agentId: string;
@@ -92,7 +100,14 @@ export function notifyLaneEvent(
 			display: event !== "background_progress",
 			details,
 		},
-		{ deliverAs: "steer" },
+		// A lane usually settles while the parent sits idle, waiting on it. A
+		// steer alone only appends the message then, so the model never reads the
+		// result until the user types again. Terminal and needs-input events wake
+		// the parent; progress and restart notices ride along with the next turn
+		// instead of waking it every 15s per lane. They leave triggerTurn unset
+		// rather than false: an explicit false would defer them to the end of a
+		// running turn instead of steering into it.
+		WAKING_EVENTS.has(event) ? { deliverAs: "steer", triggerTurn: true } : { deliverAs: "steer" },
 	);
 }
 

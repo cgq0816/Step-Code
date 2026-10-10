@@ -18,6 +18,7 @@ interface SentMessage {
 	content: string;
 	details?: { agentId?: string; event?: string; status?: string };
 	deliverAs?: string;
+	triggerTurn?: boolean;
 }
 
 function textResult(value: string): StepSubagentRunResult {
@@ -65,8 +66,8 @@ function createApi(): { api: ExtensionAPI; tools: Map<string, ToolDefinition>; s
 		setActiveTools: () => {},
 		getFlag: () => false,
 		appendEntry: () => {},
-		sendMessage: (message: SentMessage, options?: { deliverAs?: string }) => {
-			sent.push({ ...message, deliverAs: options?.deliverAs });
+		sendMessage: (message: SentMessage, options?: { deliverAs?: string; triggerTurn?: boolean }) => {
+			sent.push({ ...message, deliverAs: options?.deliverAs, triggerTurn: options?.triggerTurn });
 		},
 		sendUserMessage: () => {},
 	} as unknown as ExtensionAPI;
@@ -164,6 +165,8 @@ test("background lane completion steers an escaped agent-notification", async ()
 	const done = sent[0];
 	expect(done.customType).toBe("agent-notification");
 	expect(done.deliverAs).toBe("steer");
+	// The parent is usually idle while it waits on a lane; the result must wake it.
+	expect(done.triggerTurn).toBe(true);
 	expect(done.details?.event).toBe("background_done");
 	expect(done.content).toContain('alias="audit&quot; role=&quot;admin"');
 	expect(done.content).not.toContain('alias="audit" role="admin"');
@@ -473,4 +476,30 @@ test("agent_send validates its target and action inputs", async () => {
 	expect(tools.has("agent_interrupt")).toBe(false);
 	expect(tools.has("agent_wait")).toBe(false);
 	expect(tools.has("agent_list")).toBe(false);
+});
+
+test("progress notifications ride along without waking an idle parent", async () => {
+	const { notifyLaneEvent } = await import("../src/features/subagent/lane-events.ts");
+	const sent: Array<{ event?: string; options?: { deliverAs?: string; triggerTurn?: boolean } }> = [];
+	const pi = {
+		sendMessage: (
+			message: { details?: { event?: string } },
+			options?: { deliverAs?: string; triggerTurn?: boolean },
+		) => sent.push({ event: message.details?.event, options }),
+	} as unknown as ExtensionAPI;
+	const lane = { id: "lane", subscribe: "progress", status: "running", details: { results: [] } } as never;
+
+	notifyLaneEvent(pi, lane, "background_progress", "step 1/1");
+	notifyLaneEvent(pi, lane, "background_restarted");
+	notifyLaneEvent(pi, lane, "background_needs_input", "which file?");
+	notifyLaneEvent(pi, lane, "background_failed", "boom");
+
+	// Non-waking events must leave triggerTurn unset, not false: AgentSession
+	// defers an explicit false to the end of a running turn instead of steering.
+	expect(sent).toEqual([
+		{ event: "background_progress", options: { deliverAs: "steer" } },
+		{ event: "background_restarted", options: { deliverAs: "steer" } },
+		{ event: "background_needs_input", options: { deliverAs: "steer", triggerTurn: true } },
+		{ event: "background_failed", options: { deliverAs: "steer", triggerTurn: true } },
+	]);
 });
