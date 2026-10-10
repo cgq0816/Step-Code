@@ -507,3 +507,27 @@ test("progress notifications ride along without waking an idle parent", async ()
 		{ event: "background_failed", options: { deliverAs: "steer", triggerTurn: true } },
 	]);
 });
+
+test("a lane's final notification carries a long report in full", async () => {
+	const { api, tools, sent } = createApi();
+	// Well past the old 2,000-character cap, with the conclusion at the end.
+	const report = `${"analysis line\n".repeat(600)}SUMMARY: all files reviewed`;
+	createStepSubagentExtension({
+		includeBuiltinAgents: true,
+		agentDir: "/tmp/step-agent-test",
+		runner: async () => textResult(report),
+	})(api);
+	await tools
+		.get("subagent")!
+		.execute(
+			"call",
+			{ agent: "general", task: "review", run_in_background: true } as never,
+			undefined,
+			undefined,
+			createContext("/workspace"),
+		);
+	await waitFor(() => sent.some((message) => message.details?.event === "background_done"));
+	const done = sent.find((message) => message.details?.event === "background_done")!;
+	expect(done.content).toContain("SUMMARY: all files reviewed");
+	expect(done.content).not.toContain("[output truncated]");
+});

@@ -39,6 +39,14 @@ export interface AgentNotificationDetails {
 	detail?: string;
 }
 
+/**
+ * Cap on the lane output a final notification carries. The notification is the
+ * parent's only copy of the result (agent_send can reply or stop, not fetch),
+ * so it matches what a blocking call returns per task instead of a short
+ * preview the parent would have to dig back out of the child's session file.
+ */
+const LANE_OUTPUT_MAX_CHARS = 50_000;
+
 /** Minimum interval between background_progress notifications per lane. */
 const PROGRESS_NOTIFY_INTERVAL_MS = 15_000;
 
@@ -152,7 +160,7 @@ export function notifyLaneFinal(pi: ExtensionAPI, lane: BackgroundAgentLane): vo
 					.map(({ label, cause }) => `- ${label}: ${truncateText(cause, 400)}`)
 			: [];
 	const detail = [
-		output ? truncateText(output, 2_000) : "",
+		output ? truncateText(output, LANE_OUTPUT_MAX_CHARS) : "",
 		failureReasons.length > 0 ? `Failure reasons:\n${failureReasons.join("\n")}` : "",
 	]
 		.filter(Boolean)
