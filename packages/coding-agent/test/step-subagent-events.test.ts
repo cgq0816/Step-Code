@@ -161,6 +161,10 @@ test("background lane completion steers an escaped agent-notification", async ()
 		createContext("/workspace"),
 	)) as AgentToolResult<{ agentId?: string }>;
 	expect(result.content[0]).toMatchObject({ type: "text" });
+	// The parent must end its turn rather than sleep-poll; the lane wakes it.
+	const started = result.content[0].type === "text" ? result.content[0].text : "";
+	expect(started).toContain("Do not wait for it with sleep or polling");
+	expect(started).toContain("woken automatically");
 	await waitFor(() => sent.length >= 1);
 	const done = sent[0];
 	expect(done.customType).toBe("agent-notification");
@@ -494,11 +498,11 @@ test("progress notifications ride along without waking an idle parent", async ()
 	notifyLaneEvent(pi, lane, "background_needs_input", "which file?");
 	notifyLaneEvent(pi, lane, "background_failed", "boom");
 
-	// Non-waking events must leave triggerTurn unset, not false: AgentSession
-	// defers an explicit false to the end of a running turn instead of steering.
+	// Non-waking events must stay out of the steering queue: it drains one
+	// message per turn, so a progress backlog would hold completions behind it.
 	expect(sent).toEqual([
-		{ event: "background_progress", options: { deliverAs: "steer" } },
-		{ event: "background_restarted", options: { deliverAs: "steer" } },
+		{ event: "background_progress", options: { triggerTurn: false } },
+		{ event: "background_restarted", options: { triggerTurn: false } },
 		{ event: "background_needs_input", options: { deliverAs: "steer", triggerTurn: true } },
 		{ event: "background_failed", options: { deliverAs: "steer", triggerTurn: true } },
 	]);

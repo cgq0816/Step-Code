@@ -103,11 +103,18 @@ export function notifyLaneEvent(
 		// A lane usually settles while the parent sits idle, waiting on it. A
 		// steer alone only appends the message then, so the model never reads the
 		// result until the user types again. Terminal and needs-input events wake
-		// the parent; progress and restart notices ride along with the next turn
-		// instead of waking it every 15s per lane. They leave triggerTurn unset
-		// rather than false: an explicit false would defer them to the end of a
-		// running turn instead of steering into it.
-		WAKING_EVENTS.has(event) ? { deliverAs: "steer", triggerTurn: true } : { deliverAs: "steer" },
+		// the parent with a steer.
+		//
+		// Progress and restart notices must stay out of the steering queue. It
+		// drains one message per turn by default ("one-at-a-time"), and progress
+		// arrives every 15s per lane: while the parent sat in a long tool call
+		// (a 3-minute sleep, say) dozens queued up, the parent read one per turn,
+		// and the lanes' completion notices waited behind that backlog for over
+		// half an hour. A steer also forces another model call after the parent
+		// meant to stop. triggerTurn: false instead lands them as context:
+		// appended at once while idle, or batched in at the end of the running
+		// turn, which is the same boundary a steer would be injected at.
+		WAKING_EVENTS.has(event) ? { deliverAs: "steer", triggerTurn: true } : { triggerTurn: false },
 	);
 }
 
