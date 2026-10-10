@@ -220,7 +220,7 @@ const StepAgentScopeSchema = StringEnum(["user", "project", "both"] as const, {
 
 const StepSubscribeSchema = StringEnum(["final", "progress", "none"] as const, {
 	description:
-		'Notification level for background lanes. "final" (default) sends one completion notification, "progress" adds throttled progress updates, "none" is fire-and-forget.',
+		'Notification level for background lanes. "final" (default) sends one completion notification, "progress" adds throttled progress updates, "none" is fire-and-forget. Except with "none", completion, failure, and needs-input notifications wake you automatically, so never sleep or poll to wait for a lane.',
 	default: "final",
 });
 
@@ -549,9 +549,9 @@ export function createStepSubagentExtension(options: StepSubagentExtensionOption
 		const updateLaneWidget = (lane: BackgroundAgentLane): void => {
 			if (!lane.ctx.hasUI) return;
 			shownLanes.add(lane.id);
-			const batch = [...shownLanes]
-				.map((id) => lanes.get(id))
-				.filter((entry): entry is BackgroundAgentLane => entry !== undefined);
+			// `lanes` iterates in creation order; `shownLanes` in first-update order,
+			// which depends on which child streams first and would shuffle the rows.
+			const batch = [...lanes.values()].filter((entry) => shownLanes.has(entry.id));
 			try {
 				if (batch.every((entry) => entry.status !== "running")) {
 					shownLanes.clear();
@@ -635,7 +635,19 @@ export function createStepSubagentExtension(options: StepSubagentExtensionOption
 					const monitorHint =
 						lane.subscribe === "none"
 							? "Fire-and-forget lane: no notifications will be sent."
-							: `Lane events arrive automatically as <agent-notification> messages (subscribe: ${lane.subscribe}).`;
+							: [
+									// Without this the parent, told to "wait for the lanes", has no
+									// wait primitive and falls back to `sleep` loops: the lane result
+									// then sits behind a sleep of up to minutes, and each progress
+									// notice landing mid-sleep keeps the loop going.
+									"Do not wait for it with sleep or polling: end your turn, or carry on with other work.",
+									"You are woken automatically with an <agent-notification> when the lane finishes, fails, or needs input.",
+									lane.subscribe === "progress"
+										? "Progress <agent-notification> messages are informational; they need no reply."
+										: "",
+								]
+									.filter(Boolean)
+									.join(" ");
 					return makeToolResult(
 						details,
 						`Started background agent ${lane.id}${lane.alias ? ` (${lane.alias})` : ""}. ${monitorHint}`,
