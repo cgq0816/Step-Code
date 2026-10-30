@@ -65,9 +65,12 @@ requests: the model's declared output limit is reduced when the actual request
 leaves less context headroom. This avoids starving a reasoning-enabled summary
 with a smaller fixed cap. The coding-agent and generic harness follow this rule.
 
-`compaction.reserveTokens` still selects the automatic trigger:
-`contextTokens > contextWindow - reserveTokens`. Existing configured/default
-trigger values are unchanged. The positional reserve argument to `generateSummary`
+Under the default `v2` trigger policy, automatic compaction fires at
+`contextWindow * triggerRatio`, capped so the next request keeps the provider
+safety margin plus up to 8192 output tokens, and never below half the window.
+`tokenLimit` and an explicit `compaction.reserveTokens` can only move it
+earlier. The `legacy` policy keeps `contextTokens > contextWindow - reserveTokens`.
+The positional reserve argument to `generateSummary`
 and `generateSummaryWithUsage` remains accepted for caller compatibility but is
 unused for output sizing. `branchSummary.reserveTokens` still limits which source
 entries are selected; it does not impose a response-token cap.
